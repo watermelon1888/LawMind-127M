@@ -1,13 +1,28 @@
+# 本地协作工具、IDE 与个人配置
+AGENTS.md
 CLAUDE.md
+CONTEXT.md
+.agents/
 .claude
+.codex/
+.codex-tmp/
+.superpowers/
+.cursor/
+.docx_render/
 .idea
 .pytest_cache
 .vscode
-__pycache__/
-*.pyc
-*.pyo
 llm-from-scratch
+
+# 不公开的个人笔记、计划与内部文档
 note.md
+notes
+outline
+retrain/重训练计划.md
+/docs/agents/
+minimind/requirements_4090d.txt
+
+# 本地下载的 MiniMind-3 模型包
 minimind/minimind-3/chat_template.jinja
 minimind/minimind-3/config.json
 minimind/minimind-3/generation_config.json
@@ -15,50 +30,22 @@ minimind/minimind-3/model.safetensors
 minimind/minimind-3/special_tokens_map.json
 minimind/minimind-3/tokenizer_config.json
 minimind/minimind-3/tokenizer.json
-notes/01-data-pipeline.md
-notes/02-config-system.md
-notes/03-model-architecture.md
-notes/04-trainer.md
-notes/05-inference.md
-notes/06-main-entry.md
-notes/07-experiments.md
-notes/08-gqa.md
-notes/08b-moe.md
-notes/09-distributed-training.md
-notes/10-alignment.md
-notes/11-lora.md
-notes/12-rlhf-rlaif.md
-notes/14-pipeline-comparison.md
-notes/15-scaling-laws.md
-AGENTS.md
-notes/rag-note.md
-retrain/重训练计划.md
-minimind/requirements_4090d.txt
-docs/agents/domain.md
-docs/agents/issue-tracker.md
-CONTEXT.md
-notes/16-stage-b-scaling-law-research.md
-notes/17-stage-b-data-source-research.md
-minimind/dataset/CPT/raw/
-notes
-outline
-outline/阶段A-Tokenizer训练执行大纲.md
-outline/阶段B-数据样本自动审计设计.md
-outline/阶段B-通用预训练执行大纲.md
-outline/重训练计划.md
-outline/重训练数据候选清单.md
-outline/CPT-法律持续训练设计.md
-outline/CPT-国家法律法规数据库采集设计.md
-outline/CPT-国家法律法规数据库采集实现计划.md
-outline/rag-note.md
 
-# Python 测试与覆盖率生成物
-.pytest-*/
-.tmp-test-*/
+# Python 缓存、测试源码、覆盖率与测试临时目录
+__pycache__/
+*.pyc
+*.pyo
+**/tests/
+**/test_*.py
+**/.pytest-*/
+**/.tmp-test-*/
+/.pytest-tmp/
+/.pytest-rag-cleanup/
 .coverage
 .coverage.*
 coverage.xml
 htmlcov/
+/minimind/trainer/smoke_full_sft.py
 
 # 本地训练工作区与实验输出
 /minimind-work/
@@ -68,12 +55,12 @@ htmlcov/
 /minimind/runs/
 /minimind/checkpoints/
 /minimind/cache/
-swanlog/
-wandb/
+swanlog
+wandb
 events.out.tfevents.*
 *.log
 
-# 模型权重、恢复点与预打包 token shards
+# 模型权重、恢复点与二进制训练产物
 *.pt
 *.pth
 *.ckpt
@@ -82,20 +69,9 @@ pytorch_model*.bin
 *.npy
 *.npz
 
-# 原始列式数据与下载缓存
+# 原始数据、云端数据集与法律知识库
 *.parquet
 *.arrow
-
-# GitHub 公开源码仓库不提交测试源码与测试临时目录
-**/tests/
-**/test_*.py
-**/.pytest-*/
-**/.tmp-test-*/
-/.pytest-tmp/
-/.pytest-rag-cleanup/
-/minimind/trainer/smoke_full_sft.py
-
-# 数据集与知识库仅在云端保存
 /minimind/dataset/CPT/
 /minimind/dataset/QUERY-POOL/
 /minimind/dataset/RAG-SFT/
@@ -103,14 +79,5 @@ pytorch_model*.bin
 /rag/chunk/article_index.jsonl
 /rag/eval/eval_set.jsonl
 
-# RAG 构建产物与评测结果不提交
+# RAG 构建产物与评测结果
 /rag/eval/results/
-
-# 本地协作工具与临时产物
-/.agents/
-/.codex/
-/.codex-tmp/
-/.claude/
-/.cursor/
-/.docx_render/
-/docs/agents/
