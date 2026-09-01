@@ -1,0 +1,51 @@
+{
+  "schema_version": "1.0",
+  "pipeline": "private_holdout_assets_migration_v1",
+  "migrated_at": "2026-08-25",
+  "source_root": "C:\\Users\\18881\\PycharmProjects\\private-eval",
+  "destination_root": "rag/eval/private_holdout_assets",
+  "operation": "byte_preserving_copy",
+  "source_retained": true,
+  "files": [
+    {
+      "path": "authoring/private-holdout-v1.jsonl",
+      "role": "v1_authoring_history",
+      "bytes": 160571,
+      "sha256": "dece1b9efd1332641374639e8d8ea43cdf97fb0c1c00f7d89c2bb0ffa67c674f"
+    },
+    {
+      "path": "authoring/private-holdout-v2.jsonl",
+      "role": "current_private_holdout_authoring",
+      "bytes": 160657,
+      "sha256": "dedcbdf03a37a071c6b8f3236f4200fa6d04be60664df9c28831721e5123953c",
+      "records": 100
+    },
+    {
+      "path": "frozen/v1/holdout.jsonl",
+      "role": "v1_frozen_history",
+      "bytes": 148471,
+      "sha256": "44d288458ed03ea2726539f4f8e86ddcfd7353eaa8cc5bd7cda33084c1ecfd2e"
+    },
+    {
+      "path": "manifests/private-holdout-v1.json",
+      "role": "v1_original_freeze_manifest",
+      "bytes": 31516,
+      "sha256": "e37dcf56258c9bc88c511ddc575263d9abdd0c6e5ea5b267ba86d8572d2ae7fa"
+    },
+    {
+      "path": "manifests/private-holdout-v1.sha256",
+      "role": "v1_original_manifest_sidecar",
+      "bytes": 90,
+      "sha256": "db93e5dee2f4fef7eda01ae3cca7d6391bd7b273ebeb88e755284d1d60471785"
+    }
+  ],
+  "required_external_dependency": {
+    "path": "evaluation-exclusions-project-rag-v2.json",
+    "role": "formal_sft_isolation_manifest_for_v2_evaluation",
+    "bytes": 42482,
+    "sha256": "a493b5ac542d50d4bbbf8926ef1d08ea818dfe31176f9cfa16fd6fbf8210b3d4",
+    "present_in_source": false,
+    "action": "restore_from_authoritative_formal_training_archive_before_v2_evaluation"
+  },
+  "complete": true
+}

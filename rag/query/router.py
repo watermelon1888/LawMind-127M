@@ -4,6 +4,12 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Optional
 
+from rag.core.contracts import (
+    AnswerMode,
+    BusinessRoute,
+    LegalTaskType,
+    RouteDecision,
+)
 from rag.query.exact_reference import (
     count_article_references,
     contains_article_reference,
@@ -300,15 +306,25 @@ def _has_mixed_intents(compact_query):
 
 
 def _requires_clarification(compact_query):
-    return (
-        any(pattern.search(compact_query) for pattern in _BROAD_SCOPE_PATTERNS)
-        or _MISSING_REFERENT_RE.search(compact_query)
-        or _UNSPECIFIED_PAYMENT_RE.search(compact_query)
-        or _INCOMPLETE_TOPIC_RE.search(compact_query)
-        or _INCOMPLETE_CASE_RE.search(compact_query)
-        or _UNAVAILABLE_DOCUMENT_RE.search(compact_query)
-        or _IMPRECISE_ARTICLE_RE.search(compact_query)
-    )
+    return _clarification_reason(compact_query) is not None
+
+
+def _clarification_reason(compact_query):
+    if any(pattern.search(compact_query) for pattern in _BROAD_SCOPE_PATTERNS):
+        return "scope_too_broad"
+    if _MISSING_REFERENT_RE.search(compact_query):
+        return "missing_referent"
+    if _UNSPECIFIED_PAYMENT_RE.search(compact_query):
+        return "missing_key_facts"
+    if _INCOMPLETE_TOPIC_RE.search(compact_query):
+        return "incomplete_topic"
+    if _INCOMPLETE_CASE_RE.search(compact_query):
+        return "missing_key_facts"
+    if _UNAVAILABLE_DOCUMENT_RE.search(compact_query):
+        return "unavailable_document"
+    if _IMPRECISE_ARTICLE_RE.search(compact_query):
+        return "ambiguous_article_reference"
+    return None
 
 
 def route_query(query):
@@ -316,56 +332,90 @@ def route_query(query):
     if not isinstance(query, str):
         raise TypeError("query 必须是字符串")
     if not _CONTENT_RE.search(query):
-        return QueryDecision(query, QueryRoute.CLARIFY)
+        return RouteDecision(query, BusinessRoute.CLARIFY, reason="empty_input")
 
     compact_query = re.sub(r"\s+", "", query)
     if len(compact_query) > MAX_QUERY_CHARS:
-        return QueryDecision(query, QueryRoute.CLARIFY)
+        return RouteDecision(
+            query,
+            BusinessRoute.CLARIFY,
+            reason="query_too_long",
+        )
     has_legal_signal = _has_legal_signal(compact_query)
     has_non_legal_signal = _has_non_legal_signal(compact_query)
     has_unsupported_task = _is_unsupported_task(compact_query)
 
     if _has_mixed_intents(compact_query):
-        return QueryDecision(query, QueryRoute.CLARIFY)
-    if has_unsupported_task:
-        return QueryDecision(
+        return RouteDecision(
             query,
-            QueryRoute.REFUSE,
-            QueryReason.UNSUPPORTED_LEGAL_TASK,
+            BusinessRoute.CLARIFY,
+            reason="mixed_intent",
+        )
+    if has_unsupported_task:
+        return RouteDecision(
+            query,
+            BusinessRoute.CLARIFY,
+            reason=QueryReason.UNSUPPORTED_LEGAL_TASK.value,
         )
     if _UNSUPPORTED_SOURCE_RE.search(compact_query):
-        return QueryDecision(
+        return RouteDecision(
             query,
-            QueryRoute.REFUSE,
-            QueryReason.UNSUPPORTED_LEGAL_SOURCE,
+            BusinessRoute.CLARIFY,
+            reason=QueryReason.UNSUPPORTED_LEGAL_SOURCE.value,
         )
     if _depends_on_historical_law(compact_query) and not (
         has_non_legal_signal and not has_legal_signal
     ):
-        return QueryDecision(
+        return RouteDecision(
             query,
-            QueryRoute.REFUSE,
-            QueryReason.TIME_SENSITIVE,
+            BusinessRoute.CLARIFY,
+            reason=QueryReason.TIME_SENSITIVE.value,
         )
     if has_non_legal_signal and not has_legal_signal:
-        return QueryDecision(
+        return RouteDecision(
             query,
-            QueryRoute.REFUSE,
-            QueryReason.NON_LEGAL,
+            BusinessRoute.GENERAL_CHAT,
+            reason=QueryReason.NON_LEGAL.value,
         )
     if _requires_clarification(compact_query):
-        return QueryDecision(query, QueryRoute.CLARIFY)
+        return RouteDecision(
+            query,
+            BusinessRoute.CLARIFY,
+            reason=_clarification_reason(compact_query),
+        )
     if contains_article_reference(compact_query):
         if count_article_references(compact_query) > 3:
-            return QueryDecision(query, QueryRoute.CLARIFY)
-        return QueryDecision(query, QueryRoute.EXACT_LOOKUP)
-    return QueryDecision(query, QueryRoute.SEMANTIC_SEARCH)
+            return RouteDecision(
+                query,
+                BusinessRoute.CLARIFY,
+                reason="scope_too_broad",
+            )
+        return RouteDecision(
+            query,
+            BusinessRoute.ANSWER,
+            AnswerMode.EXACT_LOOKUP,
+        )
+    if not has_legal_signal:
+        return RouteDecision(
+            query,
+            BusinessRoute.CLARIFY,
+            reason="external_analysis_required",
+        )
+    return RouteDecision(
+        query,
+        BusinessRoute.ANSWER,
+        AnswerMode.RETRIEVAL,
+    )
 
 
 __all__ = [
+    "AnswerMode",
+    "BusinessRoute",
+    "LegalTaskType",
     "QueryDecision",
     "QueryReason",
     "QueryRoute",
+    "RouteDecision",
     "MAX_QUERY_CHARS",
     "route_query",
 ]

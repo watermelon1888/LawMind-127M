@@ -15,7 +15,9 @@ from rag.answering import (
     render_semantic_answer,
 )
 from rag.core.contracts import (
+    AnswerMode,
     AnswerStatus,
+    BusinessRoute,
     Evidence,
     LegalRAG,
     LegalRAGResult,
@@ -90,7 +92,7 @@ def _processing_failure(
         unanswered_reason=UnansweredReason.PROCESSING_FAILED,
         diagnostic_code=diagnostic_code,
         evidence=evidence,
-        rendered_answer=render_failure(),
+        rendered_answer=render_failure(diagnostic_code),
         query_enhancement=query_enhancement,
     )
 
@@ -140,12 +142,19 @@ class CurrentLawRAG(LegalRAG):
     def answer(self, query):
         """返回基于现行法证据的回答，或带审计原因的安全未作答。"""
         decision = route_query(query)
-        if decision.route is QueryRoute.CLARIFY:
+        if decision.route is BusinessRoute.CLARIFY:
             return _unanswered_result(
                 query=decision.query,
                 status=AnswerStatus.CLARIFICATION_REQUIRED,
                 reason=UnansweredReason.CLARIFICATION_REQUIRED,
                 rendered_answer=render_clarification(),
+            )
+        if decision.route is BusinessRoute.GENERAL_CHAT:
+            return _unanswered_result(
+                query=decision.query,
+                status=AnswerStatus.REFUSED,
+                reason=UnansweredReason.NON_LEGAL,
+                rendered_answer=render_refusal(UnansweredReason.NON_LEGAL),
             )
         if decision.route is QueryRoute.REFUSE:
             reason = {
@@ -164,11 +173,20 @@ class CurrentLawRAG(LegalRAG):
                 reason=reason,
                 rendered_answer=render_refusal(reason),
             )
-        if decision.route is QueryRoute.EXACT_LOOKUP:
+        if (
+            decision.route is BusinessRoute.ANSWER
+            and decision.answer_mode is AnswerMode.EXACT_LOOKUP
+        ):
             return self._answer_exact_lookup(decision)
-        if decision.route is QueryRoute.SEMANTIC_SEARCH:
+        if (
+            decision.route is BusinessRoute.ANSWER
+            and decision.answer_mode is AnswerMode.RETRIEVAL
+        ):
             return self._answer_semantic_search(decision)
-        raise RuntimeError("query 返回了不支持的 QueryRoute")
+        return _processing_failure(
+            decision.query,
+            "unsupported_route_decision",
+        )
 
     def _answer_exact_lookup(self, decision):
         try:

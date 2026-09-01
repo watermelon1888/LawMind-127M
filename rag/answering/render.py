@@ -36,10 +36,16 @@ _REFUSAL_MESSAGES = {
     ),
 }
 
-_FAILURE_MESSAGE = (
-    "本次法律证据处理未能完整完成。"
-    "为避免依据不完整时作出结论，本次暂不作答。"
-)
+_FAILURE_STAGE_MESSAGES = {
+    "exact_lookup_failed": "本次精确条文查询未能完成。",
+    "semantic_retrieval_failed": "本次法律条文检索未能完成。",
+    "evidence_packaging_failed": "本次法律证据构包未能完成。",
+    "generation_failed": "本次法律回答模型生成未能完成。",
+    "output_validation_failed": "本次法律回答未通过输出协议校验。",
+}
+
+_UNKNOWN_FAILURE_MESSAGE = "本次法律证据处理未能完整完成。"
+_FAILURE_MESSAGE_SUFFIX = "为避免依据不完整时作出结论，本次暂不作答。"
 
 
 def _render_evidence(evidence):
@@ -91,9 +97,19 @@ def render_refusal(reason):
     return RenderedAnswer(message=message)
 
 
-def render_failure():
-    """返回所有处理失败共用的安全话术。"""
-    return RenderedAnswer(message=_FAILURE_MESSAGE)
+def render_failure(diagnostic_code):
+    """按处理失败阶段返回安全话术和稳定诊断标识。"""
+    if not isinstance(diagnostic_code, str) or not diagnostic_code.strip():
+        raise TypeError("diagnostic_code 必须是非空字符串")
+    stage_message = _FAILURE_STAGE_MESSAGES.get(
+        diagnostic_code, _UNKNOWN_FAILURE_MESSAGE
+    )
+    return RenderedAnswer(
+        message=(
+            f"{stage_message}{_FAILURE_MESSAGE_SUFFIX}\n"
+            f"诊断标识：{diagnostic_code}"
+        )
+    )
 
 
 __all__ = [

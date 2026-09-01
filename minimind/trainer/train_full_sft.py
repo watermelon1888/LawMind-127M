@@ -20,12 +20,8 @@ if __package__ in (None, ""):
     sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 try:
-    from ..dataset.pretrain_dataset import DeterministicPretrainSampler
-    from ..dataset.sft_dataset import LABEL_MASK_VERSION, SftDataset
     from ..model.model_minimind import MiniMindConfig, MiniMindForCausalLM
 except ImportError:
-    from dataset.pretrain_dataset import DeterministicPretrainSampler
-    from dataset.sft_dataset import LABEL_MASK_VERSION, SftDataset
     from model.model_minimind import MiniMindConfig, MiniMindForCausalLM
 
 from . import train_pretrain as pretrain_entry
@@ -44,7 +40,6 @@ from .sft_runtime import (
     save_sft_checkpoint,
 )
 from .trainer_utils import Logger, get_model_params, setup_seed
-
 
 EXPECTED_SEQUENCE_LENGTH = 768
 DATA_TIER = "all-retained"
@@ -332,6 +327,7 @@ def _training_invariants(
     tokenizer_identity: dict[str, Any],
     train_sequence_count: int,
     optimizer: torch.optim.Optimizer,
+    label_mask_version: str,
 ) -> dict[str, Any]:
     return {
         "pipeline": "legal_full_sft",
@@ -344,7 +340,7 @@ def _training_invariants(
         "model": MODEL_ARCHITECTURE,
         "tokenizer": tokenizer_identity,
         "sequence_length": EXPECTED_SEQUENCE_LENGTH,
-        "label_mask_version": LABEL_MASK_VERSION,
+        "label_mask_version": label_mask_version,
         "train_sequence_count": train_sequence_count,
         "sampler_seed": args.seed,
         "micro_batch_size": args.micro_batch_size,
@@ -496,6 +492,13 @@ def _export_new_weights(path: Path, model: torch.nn.Module) -> None:
 
 def run_training(args: argparse.Namespace) -> SftProgress:
     """执行单卡 all-retained 法律 SFT，并返回最终 optimizer 边界进度。"""
+    try:
+        from ..dataset.pretrain_dataset import DeterministicPretrainSampler
+        from ..dataset.sft_dataset import LABEL_MASK_VERSION, SftDataset
+    except ImportError:
+        from dataset.pretrain_dataset import DeterministicPretrainSampler
+        from dataset.sft_dataset import LABEL_MASK_VERSION, SftDataset
+
     _validate_args(args)
     paths = _resolve_paths(args)
     if args.resume:
@@ -546,6 +549,7 @@ def run_training(args: argparse.Namespace) -> SftProgress:
             tokenizer_identity=tokenizer_record,
             train_sequence_count=len(train_dataset),
             optimizer=optimizer,
+            label_mask_version=LABEL_MASK_VERSION,
         )
         controls = _training_controls(args)
         progress = SftProgress()

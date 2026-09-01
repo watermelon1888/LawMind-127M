@@ -2,6 +2,7 @@
 AGENTS.md
 CLAUDE.md
 CONTEXT.md
+.env
 .agents/
 .claude
 .codex/

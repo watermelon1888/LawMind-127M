@@ -118,7 +118,7 @@ render_exact_lookup(evidence) -> RenderedAnswer
 render_semantic_answer(package, answer) -> RenderedAnswer
 render_clarification() -> RenderedAnswer
 render_refusal(reason) -> RenderedAnswer
-render_failure() -> RenderedAnswer
+render_failure(diagnostic_code) -> RenderedAnswer
 ```
 
 `AnswerProtocolError` 表示模型输出不满足固定 JSON 协议；`PromptTokenCountError` 表示当前 tokenizer 无法可靠复现运行时 prompt；这两类错误都应由 core 转换为安全处理失败。
@@ -178,7 +178,7 @@ render_failure() -> RenderedAnswer
   - 对象：`EvidencePackage`、`ModelAnswer` -> `RenderedAnswer`
   - 行为：只投影模型实际引用的完整法条，附加简短归纳和固定回答范围。
 8. **处理其他执行路径**
-  - 位置：`render.py::render_exact_lookup()`、`render_clarification()`、`render_refusal()`、`render_failure()`
+  - 位置：`render.py::render_exact_lookup()`、`render_clarification()`、`render_refusal()`、`render_failure(diagnostic_code)`
   - 对象：可信程序状态 -> `RenderedAnswer`
   - 行为：不调用回答模型，直接生成对应的固定结构或消息。
 

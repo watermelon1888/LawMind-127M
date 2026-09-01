@@ -6,6 +6,69 @@ from enum import Enum
 from typing import Optional, Tuple
 
 
+class BusinessRoute(str, Enum):
+    ANSWER = "answer"
+    CLARIFY = "clarify"
+    GENERAL_CHAT = "general_chat"
+
+
+class AnswerMode(str, Enum):
+    EXACT_LOOKUP = "exact_lookup"
+    RETRIEVAL = "retrieval"
+
+
+class LegalTaskType(str, Enum):
+    RULE_LOOKUP = "rule_lookup"
+    CASE_APPLICATION = "case_application"
+
+
+@dataclass(frozen=True)
+class RouteDecision:
+    query: str
+    route: BusinessRoute
+    answer_mode: Optional[AnswerMode] = None
+    task_type: Optional[LegalTaskType] = None
+    reason: Optional[str] = None
+    decision_source: str = "deterministic"
+
+    def __post_init__(self):
+        if not isinstance(self.query, str):
+            raise TypeError("query must be a string")
+        if not isinstance(self.route, BusinessRoute):
+            raise TypeError("route must be BusinessRoute")
+        if self.answer_mode is not None and not isinstance(
+            self.answer_mode, AnswerMode
+        ):
+            raise TypeError("answer_mode must be AnswerMode or None")
+        if self.task_type is not None and not isinstance(
+            self.task_type, LegalTaskType
+        ):
+            raise TypeError("task_type must be LegalTaskType or None")
+        if self.reason is not None:
+            _require_non_blank("reason", self.reason)
+        if self.decision_source not in {"deterministic", "external"}:
+            raise ValueError(
+                "decision_source must be deterministic or external"
+            )
+
+        if self.route is not BusinessRoute.ANSWER:
+            if self.answer_mode is not None:
+                raise ValueError("non-answer routes cannot carry answer_mode")
+            if self.task_type is not None:
+                raise ValueError("non-answer routes cannot carry task_type")
+            return
+
+        if self.answer_mode is None:
+            raise ValueError("answer route must carry answer_mode")
+        if self.reason is not None:
+            raise ValueError("answer routes cannot carry reason")
+        if (
+            self.answer_mode is AnswerMode.EXACT_LOOKUP
+            and self.task_type is not None
+        ):
+            raise ValueError("exact lookup cannot carry task_type")
+
+
 class AnswerStatus(str, Enum):
     """一次法律问答的对外处理结果。"""
 
@@ -271,15 +334,19 @@ class LegalRAG(ABC):
 
 
 __all__ = [
+    "AnswerMode",
     "AnswerStatus",
+    "BusinessRoute",
     "Evidence",
     "LegalRAG",
     "LegalRAGResult",
+    "LegalTaskType",
     "ModelAnswer",
     "QueryEnhancementFailureReason",
     "QueryEnhancementStatus",
     "QueryEnhancementTrace",
     "RenderedAnswer",
     "RenderedEvidence",
+    "RouteDecision",
     "UnansweredReason",
 ]

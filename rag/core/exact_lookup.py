@@ -4,7 +4,7 @@ from enum import Enum
 from typing import Tuple
 
 from rag.knowledge import ArticleRepository, LegalArticle
-from rag.query import QueryDecision, QueryRoute
+from rag.query import AnswerMode, BusinessRoute, RouteDecision
 from rag.query.exact_reference import (
     ExactReferenceStatus,
     extract_exact_references,
@@ -41,10 +41,13 @@ class ExactLookupResolution:
 
 def resolve_exact_lookup(decision, repository: ArticleRepository):
     """执行已通过前置路由的一至三条确定性查找。"""
-    if not isinstance(decision, QueryDecision):
-        raise TypeError("decision 必须是 QueryDecision")
-    if decision.route is not QueryRoute.EXACT_LOOKUP:
-        raise ValueError("只有 exact_lookup 决策可以精确查条")
+    if not isinstance(decision, RouteDecision):
+        raise TypeError("decision must be RouteDecision")
+    if not (
+        decision.route is BusinessRoute.ANSWER
+        and decision.answer_mode is AnswerMode.EXACT_LOOKUP
+    ):
+        raise ValueError("only exact lookup decisions can use exact lookup")
 
     parsed = extract_exact_references(decision.query)
     if parsed.status is ExactReferenceStatus.CLARIFICATION_REQUIRED:
