@@ -134,8 +134,9 @@ class TestOpenAICompatibleLLM(unittest.TestCase):
         missing = dict(values)
         del missing["EXTERNAL_LLM_API_KEY"]
         with patch.dict(os.environ, missing, clear=True):
-            with self.assertRaises(ExternalLLMError) as context:
-                OpenAICompatibleLLM.from_env()
+            with patch("rag.external.client.load_dotenv"):
+                with self.assertRaises(ExternalLLMError) as context:
+                    OpenAICompatibleLLM.from_env()
         self.assertIs(
             ExternalLLMErrorCode.CONFIGURATION_ERROR,
             context.exception.code,

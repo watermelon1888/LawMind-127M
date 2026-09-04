@@ -27,10 +27,13 @@ from rag.core.contracts import (
     QueryEnhancementTrace,
     UnansweredReason,
 )
+from rag.core.answerability import decide_answerability
 from rag.core.exact_lookup import ExactLookupStatus, resolve_exact_lookup
 from rag.core.semantic_search import resolve_semantic_search
 from rag.knowledge import ArticleRepository, LegalArticle
 from rag.query import (
+    ClarificationPlanningError,
+    ClarificationProtocolError,
     QueryEnhancement,
     QueryEnhancementProtocolError,
     QueryReason,
@@ -39,6 +42,7 @@ from rag.query import (
     analyze_request,
     compile_retrieval_queries,
     parse_and_validate_query_enhancement,
+    plan_clarification,
     route_query,
 )
 from rag.retrieval import RankedArticle
@@ -105,6 +109,25 @@ def _processing_failure(
     )
 
 
+def _render_dynamic_clarification(external_llm, query, task_type=None, evidence=()):
+    """优先生成动态澄清，失败时返回固定澄清话术。"""
+    if external_llm is None or not callable(
+        getattr(external_llm, "generate", None)
+    ):
+        return render_clarification()
+    try:
+        plan = plan_clarification(query, task_type, evidence, external_llm)
+    except (
+        ClarificationPlanningError,
+        ClarificationProtocolError,
+        TypeError,
+        ValueError,
+    ):
+        _LOGGER.warning("澄清规划失败，回退固定模板")
+        return render_clarification()
+    return render_clarification(plan.question)
+
+
 class CurrentLawRAG(LegalRAG):
     """仅依据当前知识库中现行有效法条作答的总编排器。"""
 
@@ -155,7 +178,8 @@ class CurrentLawRAG(LegalRAG):
 
     def answer(self, query):
         """返回基于现行法证据的回答，或带审计原因的安全未作答。"""
-        decision = route_query(query)
+        external_llm = getattr(self, "_external_llm", None)
+        decision = route_query(query, external_llm=external_llm)
         if (
             decision.route is BusinessRoute.CLARIFY
             and decision.reason == "external_analysis_required"
@@ -190,7 +214,11 @@ class CurrentLawRAG(LegalRAG):
                 query=decision.query,
                 status=AnswerStatus.CLARIFICATION_REQUIRED,
                 reason=UnansweredReason.CLARIFICATION_REQUIRED,
-                rendered_answer=render_clarification(),
+                rendered_answer=_render_dynamic_clarification(
+                    external_llm,
+                    decision.query,
+                    getattr(decision, "task_type", None),
+                ),
             )
         if decision.route is BusinessRoute.GENERAL_CHAT:
             return self._answer_general_chat(decision)
@@ -264,7 +292,10 @@ class CurrentLawRAG(LegalRAG):
                 query=decision.query,
                 status=AnswerStatus.CLARIFICATION_REQUIRED,
                 reason=UnansweredReason.CLARIFICATION_REQUIRED,
-                rendered_answer=render_clarification(),
+                rendered_answer=_render_dynamic_clarification(
+                    self._external_llm,
+                    decision.query,
+                ),
             )
         evidence = tuple(_to_evidence(item) for item in resolution.articles)
         return LegalRAGResult(
@@ -363,14 +394,24 @@ class CurrentLawRAG(LegalRAG):
                 query_enhancement=trace,
             )
         if not ranked:
-            reason = UnansweredReason.NO_VERIFIABLE_EVIDENCE
-            return _unanswered_result(
-                query=decision.query,
-                status=AnswerStatus.REFUSED,
-                reason=reason,
-                rendered_answer=render_refusal(reason),
-                query_enhancement=trace,
+            answerability = decide_answerability(
+                decision.query,
+                decision.task_type,
+                ranked,
+                None,
             )
+            if answerability.route is BusinessRoute.CLARIFY:
+                return _unanswered_result(
+                    query=decision.query,
+                    status=AnswerStatus.CLARIFICATION_REQUIRED,
+                    reason=UnansweredReason.CLARIFICATION_REQUIRED,
+                    rendered_answer=_render_dynamic_clarification(
+                        self._external_llm,
+                        decision.query,
+                        decision.task_type,
+                    ),
+                    query_enhancement=trace,
+                )
 
         try:
             package, _prompt_tokens = self._evidence_packager.build(
@@ -384,6 +425,25 @@ class CurrentLawRAG(LegalRAG):
             )
 
         evidence = package.evidence
+        answerability = decide_answerability(
+            decision.query,
+            decision.task_type,
+            ranked,
+            package,
+        )
+        if answerability.route is BusinessRoute.CLARIFY:
+            return _unanswered_result(
+                query=decision.query,
+                status=AnswerStatus.CLARIFICATION_REQUIRED,
+                reason=UnansweredReason.CLARIFICATION_REQUIRED,
+                rendered_answer=_render_dynamic_clarification(
+                    self._external_llm,
+                    decision.query,
+                    decision.task_type,
+                    evidence,
+                ),
+                query_enhancement=trace,
+            )
         try:
             raw_text = self._generate(
                 build_answer_prompt(package),

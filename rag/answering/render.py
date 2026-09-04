@@ -88,9 +88,15 @@ def render_general_chat(text):
     return RenderedAnswer(message=text.strip())
 
 
-def render_clarification():
-    """返回所有澄清路径共用的固定话术。"""
-    return RenderedAnswer(message=_CLARIFICATION_MESSAGE)
+def render_clarification(question=None):
+    """返回动态澄清问题，或在未提供时返回固定话术。"""
+    if question is None:
+        message = _CLARIFICATION_MESSAGE
+    else:
+        if not isinstance(question, str) or not question.strip():
+            raise ValueError("question 必须是非空字符串")
+        message = question.strip()
+    return RenderedAnswer(message=message)
 
 
 def render_refusal(reason):

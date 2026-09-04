@@ -14,6 +14,7 @@ from rag.query.exact_reference import (
     count_article_references,
     contains_article_reference,
 )
+from rag.query.task import classify_legal_task
 
 
 class QueryRoute(str, Enum):
@@ -327,7 +328,7 @@ def _clarification_reason(compact_query):
     return None
 
 
-def route_query(query):
+def route_query(query, *, external_llm=None, external_decision=None):
     """按固定优先级把原始问题路由到唯一处理路径。"""
     if not isinstance(query, str):
         raise TypeError("query 必须是字符串")
@@ -401,10 +402,38 @@ def route_query(query):
             BusinessRoute.CLARIFY,
             reason="external_analysis_required",
         )
+    task_decision = classify_legal_task(
+        query,
+        external_llm=external_llm,
+        external_decision=external_decision,
+    )
+    if task_decision.route is BusinessRoute.CLARIFY:
+        return RouteDecision(
+            query,
+            BusinessRoute.CLARIFY,
+            reason=task_decision.reason or "task_type_ambiguous",
+            decision_source=task_decision.decision_source,
+        )
+    if task_decision.route is BusinessRoute.GENERAL_CHAT:
+        return RouteDecision(
+            query,
+            BusinessRoute.GENERAL_CHAT,
+            reason=task_decision.reason or "external_general_chat",
+            decision_source=task_decision.decision_source,
+        )
+    if task_decision.task_type is None:
+        return RouteDecision(
+            query,
+            BusinessRoute.CLARIFY,
+            reason=task_decision.reason or "task_type_ambiguous",
+            decision_source=task_decision.decision_source,
+        )
     return RouteDecision(
         query,
         BusinessRoute.ANSWER,
         AnswerMode.RETRIEVAL,
+        task_type=task_decision.task_type,
+        decision_source=task_decision.decision_source,
     )
 
 

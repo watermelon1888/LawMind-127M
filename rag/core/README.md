@@ -76,7 +76,7 @@ rag/core/
 | `VERIFIED_LOOKUP` | 程序已精确定位并展示用户指定法条 | 是，原文展示 |
 | `RETRIEVED_EVIDENCE` | 检索证据经过模型归纳并通过协议校验 | 是，证据加简短归纳 |
 | `CLARIFICATION_REQUIRED` | 输入不足以安全确定问题或引用 | 否 |
-| `REFUSED` | 请求超出范围，或 retrieval 没有返回可核验候选 | 否 |
+| `REFUSED` | 请求超出当前系统支持范围 | 否 |
 | `PROCESSING_FAILED` | 检索、构包、生成或协议处理未完整完成 | 否 |
 
 状态保持粗粒度，只回答“本次请求采用了哪种结果路径”。具体未作答原因和内部停止阶段由其他字段表达。
@@ -89,7 +89,7 @@ rag/core/
 | `TIME_SENSITIVE` | 历史版本或过去适用问题 |
 | `UNSUPPORTED_LEGAL_SOURCE` | 当前知识库不支持的规范或案例来源 |
 | `UNSUPPORTED_LEGAL_TASK` | 文书代写、结果预测或规避监管等任务 |
-| `NO_VERIFIABLE_EVIDENCE` | retrieval 没有返回可核验候选 |
+| `NO_VERIFIABLE_EVIDENCE` | 历史兼容原因；当前空检索统一进入 `CLARIFY` |
 | `CLARIFICATION_REQUIRED` | 当前输入需要补充或收窄 |
 | `PROCESSING_FAILED` | 处理链路未完整完成 |
 
@@ -206,7 +206,7 @@ CurrentLawRAG.answer(原始 query)
 2. **处理 clarify**
    - 位置：`legal_rag.py::CurrentLawRAG.answer()`、`answering::render_clarification()`
    - 对象：`CLARIFY` -> `LegalRAGResult`
-   - 行为：返回 `CLARIFICATION_REQUIRED` 和统一澄清消息，不调用 knowledge、retrieval 或模型。
+   - 行为：优先调用外部澄清规划生成一个针对性问题；外部不可用或失败时返回固定澄清消息，不调用 knowledge 或 retrieval。
 
 3. **处理 refuse**
    - 位置：`legal_rag.py::CurrentLawRAG.answer()`、`answering::render_refusal()`
@@ -226,7 +226,7 @@ CurrentLawRAG.answer(原始 query)
 6. **执行 semantic_search**
    - 位置：`legal_rag.py::_answer_semantic_search()`、`semantic_search.py::resolve_semantic_search()`、`retrieval::SemanticRetriever.search_many()`
    - 对象：原始 query、trace 中的检索 query -> `tuple[RankedArticle, ...]`
-   - 行为：增强成功时执行多 query；增强检索异常会丢弃全部增强候选并重跑原始单 query。基线也失败才进入 `semantic_retrieval_failed`；空候选返回 `REFUSED + NO_VERIFIABLE_EVIDENCE`。
+   - 行为：增强成功时执行多 query；增强检索异常会丢弃全部增强候选并重跑原始单 query。基线也失败才进入 `semantic_retrieval_failed`；空候选进入回答条件判断并返回 `CLARIFY`。
 
 7. **构造模型证据包**
    - 位置：`legal_rag.py::_answer_semantic_search()`、`answering::EvidencePackager.build()`
@@ -241,7 +241,7 @@ CurrentLawRAG.answer(原始 query)
 9. **形成最终语义结果**
    - 位置：`legal_rag.py::_answer_semantic_search()`、`answering::render_semantic_answer()`
    - 对象：`ModelAnswer` -> `LegalRAGResult`
-   - 行为：通过两字段协议校验后返回 `RETRIEVED_EVIDENCE`，并只展示被引用法条；不判断证据包是否完整支持用户问题。
+   - 行为：先通过回答条件判断，再调用两字段协议回答模型；校验通过后返回 `RETRIEVED_EVIDENCE`，并只展示被引用法条；不使用未经校准的检索分数阈值。
 
 ## 具体实现细节
 
@@ -314,7 +314,7 @@ CurrentLawRAG.answer(原始 query)
 #### 非空证据包直接回答
 
 - **要解决的问题**：当前回答模型只学习充分证据下的原子法律结论，不承担线上证据充分性分类。
-- **当前选择**：retrieval 返回非空候选且构包成功后直接调用模型；合法两字段输出形成回答，JSON 或字段不合法映射为 `PROCESSING_FAILED + output_validation_failed`。
+- **当前选择**：retrieval 返回非空候选且构包成功后先执行回答条件判断；通过后才调用模型，合法两字段输出形成回答，JSON 或字段不合法映射为 `PROCESSING_FAILED + output_validation_failed`。
 - **选择理由**：程序不输出 `complete | partial | none`，模型也不决定是否应因证据不足拒答；请求范围拒答、空召回和服务故障继续由既有程序路径处理。
 - **影响与限制**：必要证据未完整召回时，合法模型输出仍可能是不完整回答，这是当前明确接受的剩余风险。
 

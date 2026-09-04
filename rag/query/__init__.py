@@ -24,6 +24,17 @@ from rag.query.external_analysis import (
     build_external_analysis_prompt,
     parse_and_validate_external_analysis,
 )
+from rag.query.task import LegalTaskDecision, classify_legal_task
+from rag.query.clarification import (
+    CLARIFICATION_SCHEMA,
+    CLARIFICATION_SYSTEM_PROMPT,
+    ClarificationPlan,
+    ClarificationPlanningError,
+    ClarificationProtocolError,
+    build_clarification_prompt,
+    parse_and_validate_clarification,
+    plan_clarification,
+)
 from rag.core.contracts import (
     AnswerMode,
     BusinessRoute,
@@ -54,4 +65,14 @@ __all__ = [
     "analyze_request",
     "build_external_analysis_prompt",
     "parse_and_validate_external_analysis",
+    "LegalTaskDecision",
+    "classify_legal_task",
+    "CLARIFICATION_SCHEMA",
+    "CLARIFICATION_SYSTEM_PROMPT",
+    "ClarificationPlan",
+    "ClarificationPlanningError",
+    "ClarificationProtocolError",
+    "build_clarification_prompt",
+    "parse_and_validate_clarification",
+    "plan_clarification",
 ]

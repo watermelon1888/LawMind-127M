@@ -116,7 +116,7 @@ build_answer_prompt(package) -> list[message]
 parse_and_validate_answer(package, raw_text) -> ModelAnswer
 render_exact_lookup(evidence) -> RenderedAnswer
 render_semantic_answer(package, answer) -> RenderedAnswer
-render_clarification() -> RenderedAnswer
+render_clarification(question=None) -> RenderedAnswer
 render_refusal(reason) -> RenderedAnswer
 render_failure(diagnostic_code) -> RenderedAnswer
 ```
@@ -180,7 +180,7 @@ render_failure(diagnostic_code) -> RenderedAnswer
 8. **处理其他执行路径**
   - 位置：`render.py::render_exact_lookup()`、`render_clarification()`、`render_refusal()`、`render_failure(diagnostic_code)`
   - 对象：可信程序状态 -> `RenderedAnswer`
-  - 行为：不调用回答模型，直接生成对应的固定结构或消息。
+  - 行为：不调用法律回答模型；澄清路径可展示外部规划生成的问题，失败时使用固定消息。
 
 
 

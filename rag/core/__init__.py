@@ -17,6 +17,7 @@ from rag.core.contracts import (
     RouteDecision,
     UnansweredReason,
 )
+from rag.core.answerability import AnswerabilityDecision, decide_answerability
 
 
 def __getattr__(name):
@@ -29,10 +30,12 @@ def __getattr__(name):
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 __all__ = [
+    "AnswerabilityDecision",
     "AnswerMode",
     "AnswerStatus",
     "BusinessRoute",
     "CurrentLawRAG",
+    "decide_answerability",
     "Evidence",
     "LegalRAG",
     "LegalRAGResult",

@@ -6,6 +6,7 @@ import logging
 import time
 from collections.abc import Mapping, Sequence
 
+from dotenv import load_dotenv
 from openai import APIConnectionError, APIError, APITimeoutError, OpenAI
 
 from rag.external.contracts import ExternalLLMError, ExternalLLMErrorCode
@@ -60,6 +61,7 @@ class OpenAICompatibleLLM:
     @classmethod
     def from_env(cls):
         """从 EXTERNAL_LLM_* 环境变量创建生产客户端。"""
+        load_dotenv(override=False)
         values = {
             "base_url": os.getenv("EXTERNAL_LLM_BASE_URL"),
             "api_key": os.getenv("EXTERNAL_LLM_API_KEY"),

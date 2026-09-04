@@ -39,6 +39,8 @@ __pycache__/
 **/tests/
 **/test_*.py
 !rag/query/test_external_analysis.py
+!rag/query/test_task.py
+!rag/query/test_clarification.py
 **/.pytest-*/
 **/.tmp-test-*/
 /.pytest-tmp/

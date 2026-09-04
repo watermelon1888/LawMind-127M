@@ -11,6 +11,7 @@ rag/query/
 ├── router.py           # 定义路由契约并按固定优先级判断执行路径
 ├── exact_reference.py  # 从原始问题中提取一至三条完整法条引用
 ├── enhancement.py      # 定义增强协议、严格校验和检索腿编译
+├── clarification.py    # 定义外部澄清规划协议与严格校验
 └── __init__.py         # 导出 query 的公开接口
 ```
 
@@ -24,6 +25,7 @@ rag/query/
 - 信息不足、范围过宽、混合意图和超长查询的澄清路由；
 - 一至三条法条引用的确定性提取，支持并列条号和法名继承；
 - 固定 `rewrite / expansion_terms / subqueries` 三字段增强协议；
+- 固定 `missing_information / question` 两字段澄清规划协议；
 - 增强输出的全有或全无校验、空白规范化和稳定去重；
 - 原始 query、rewrite、单条术语扩展 query 和最多三条 subquery 的固定编译；
 - 对路由顺序和对象组合执行运行时约束。
@@ -144,6 +146,18 @@ compile_retrieval_queries(original_query, enhancement) -> tuple[str, ...]
 ```
 
 模型输出必须是字段及顺序精确匹配的单个 JSON 对象。任一字段非法都会抛出 `QueryEnhancementProtocolError`，由 core 记录 `INVALID_OUTPUT` 并回退原始 query；本模块不会尝试修复 Markdown、附加解释或半份合法输出。
+
+### ClarificationPlan
+
+`ClarificationPlan` 用于在已有信息不足时，由外部模型规划一个最关键的补充问题。它不生成法律结论，也不改变业务路由。
+
+```text
+build_clarification_prompt(query, task_type, evidence)
+parse_and_validate_clarification(raw_text)
+plan_clarification(query, task_type, evidence, external_llm)
+```
+
+外部输出必须严格包含 `missing_information` 和 `question` 两个字段；缺失信息最多三项，问题只能有一个。调用失败和协议失败分别抛出受控异常，由 core 后续步骤决定是否使用程序固定模板降级。
 
 ### ExactReference 与 ExactReferenceResult
 
