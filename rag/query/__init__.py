@@ -15,6 +15,15 @@ from rag.query.router import (
     QueryRoute,
     route_query,
 )
+from rag.query.external_analysis import (
+    EXTERNAL_ANALYSIS_SCHEMA,
+    EXTERNAL_ANALYSIS_SYSTEM_PROMPT,
+    ExternalAnalysisProtocolError,
+    ExternalRequestDecision,
+    analyze_request,
+    build_external_analysis_prompt,
+    parse_and_validate_external_analysis,
+)
 from rag.core.contracts import (
     AnswerMode,
     BusinessRoute,
@@ -38,4 +47,11 @@ __all__ = [
     "compile_retrieval_queries",
     "parse_and_validate_query_enhancement",
     "route_query",
+    "EXTERNAL_ANALYSIS_SCHEMA",
+    "EXTERNAL_ANALYSIS_SYSTEM_PROMPT",
+    "ExternalAnalysisProtocolError",
+    "ExternalRequestDecision",
+    "analyze_request",
+    "build_external_analysis_prompt",
+    "parse_and_validate_external_analysis",
 ]

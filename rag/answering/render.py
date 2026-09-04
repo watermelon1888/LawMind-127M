@@ -81,6 +81,13 @@ def render_semantic_answer(package, answer):
     return RenderedAnswer(evidence=selected, summary=answer.summary)
 
 
+def render_general_chat(text):
+    """将外部通用对话文本投影为不携带法律证据的展示结果。"""
+    if not isinstance(text, str) or not text.strip():
+        raise ValueError("通用对话文本必须是非空字符串")
+    return RenderedAnswer(message=text.strip())
+
+
 def render_clarification():
     """返回所有澄清路径共用的固定话术。"""
     return RenderedAnswer(message=_CLARIFICATION_MESSAGE)
@@ -116,6 +123,7 @@ __all__ = [
     "render_clarification",
     "render_exact_lookup",
     "render_failure",
+    "render_general_chat",
     "render_refusal",
     "render_semantic_answer",
 ]

@@ -74,6 +74,7 @@ class AnswerStatus(str, Enum):
 
     VERIFIED_LOOKUP = "verified_lookup"
     RETRIEVED_EVIDENCE = "retrieved_evidence"
+    GENERAL_CHAT = "general_chat"
     CLARIFICATION_REQUIRED = "clarification_required"
     REFUSED = "refused"
     PROCESSING_FAILED = "processing_failed"

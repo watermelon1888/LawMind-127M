@@ -11,6 +11,7 @@ from rag.answering import (
     render_clarification,
     render_exact_lookup,
     render_failure,
+    render_general_chat,
     render_refusal,
     render_semantic_answer,
 )
@@ -34,6 +35,8 @@ from rag.query import (
     QueryEnhancementProtocolError,
     QueryReason,
     QueryRoute,
+    RouteDecision,
+    analyze_request,
     compile_retrieval_queries,
     parse_and_validate_query_enhancement,
     route_query,
@@ -42,6 +45,11 @@ from rag.retrieval import RankedArticle
 
 
 _LOGGER = logging.getLogger(__name__)
+
+GENERAL_CHAT_MAX_OUTPUT_TOKENS = 512
+_GENERAL_CHAT_SYSTEM_PROMPT = (
+    "你是通用对话助手。请直接、简洁地回答用户问题，不要输出法律引用、法律结论或法律任务分类。"
+)
 
 
 def _to_evidence(article):
@@ -108,6 +116,7 @@ class CurrentLawRAG(LegalRAG):
         evidence_packager,
         generate,
         query_enhancer=None,
+        external_llm=None,
         max_output_tokens=RAG_MAX_OUTPUT_TOKENS,
     ):
         if not isinstance(article_repository, ArticleRepository):
@@ -123,6 +132,10 @@ class CurrentLawRAG(LegalRAG):
                 raise TypeError("query_enhancer 必须可调用或为 None")
             if not callable(getattr(semantic_retriever, "search_many", None)):
                 raise TypeError("启用 Query 增强时 semantic_retriever 必须提供 search_many")
+        if external_llm is not None and not callable(
+            getattr(external_llm, "generate", None)
+        ):
+            raise TypeError("external_llm 必须提供可调用的 generate 或为 None")
         if (
             not isinstance(max_output_tokens, int)
             or isinstance(max_output_tokens, bool)
@@ -137,11 +150,41 @@ class CurrentLawRAG(LegalRAG):
         self._evidence_packager = evidence_packager
         self._generate = generate
         self._query_enhancer = query_enhancer
+        self._external_llm = external_llm
         self._max_output_tokens = max_output_tokens
 
     def answer(self, query):
         """返回基于现行法证据的回答，或带审计原因的安全未作答。"""
         decision = route_query(query)
+        if (
+            decision.route is BusinessRoute.CLARIFY
+            and decision.reason == "external_analysis_required"
+        ):
+            external_llm = getattr(self, "_external_llm", None)
+            if external_llm is not None:
+                analysis = analyze_request(decision.query, external_llm)
+                if analysis.route is BusinessRoute.ANSWER:
+                    decision = RouteDecision(
+                        query=decision.query,
+                        route=BusinessRoute.ANSWER,
+                        answer_mode=AnswerMode.RETRIEVAL,
+                        task_type=analysis.task_type,
+                        decision_source="external",
+                    )
+                elif analysis.route is BusinessRoute.GENERAL_CHAT:
+                    decision = RouteDecision(
+                        query=decision.query,
+                        route=BusinessRoute.GENERAL_CHAT,
+                        reason=analysis.reason,
+                        decision_source="external",
+                    )
+                else:
+                    decision = RouteDecision(
+                        query=decision.query,
+                        route=BusinessRoute.CLARIFY,
+                        reason=analysis.reason,
+                        decision_source="external",
+                    )
         if decision.route is BusinessRoute.CLARIFY:
             return _unanswered_result(
                 query=decision.query,
@@ -150,12 +193,7 @@ class CurrentLawRAG(LegalRAG):
                 rendered_answer=render_clarification(),
             )
         if decision.route is BusinessRoute.GENERAL_CHAT:
-            return _unanswered_result(
-                query=decision.query,
-                status=AnswerStatus.REFUSED,
-                reason=UnansweredReason.NON_LEGAL,
-                rendered_answer=render_refusal(UnansweredReason.NON_LEGAL),
-            )
+            return self._answer_general_chat(decision)
         if decision.route is QueryRoute.REFUSE:
             reason = {
                 QueryReason.NON_LEGAL: UnansweredReason.NON_LEGAL,
@@ -186,6 +224,34 @@ class CurrentLawRAG(LegalRAG):
         return _processing_failure(
             decision.query,
             "unsupported_route_decision",
+        )
+
+    def _answer_general_chat(self, decision):
+        external_llm = getattr(self, "_external_llm", None)
+        if external_llm is None:
+            return _processing_failure(
+                decision.query,
+                "general_chat_unavailable",
+            )
+        try:
+            raw_text = external_llm.generate(
+                [
+                    {"role": "system", "content": _GENERAL_CHAT_SYSTEM_PROMPT},
+                    {"role": "user", "content": decision.query},
+                ],
+                temperature=0,
+                max_tokens=GENERAL_CHAT_MAX_OUTPUT_TOKENS,
+            )
+            rendered_answer = render_general_chat(raw_text)
+        except Exception:
+            return _processing_failure(
+                decision.query,
+                "general_chat_failed",
+            )
+        return LegalRAGResult(
+            query=decision.query,
+            status=AnswerStatus.GENERAL_CHAT,
+            rendered_answer=rendered_answer,
         )
 
     def _answer_exact_lookup(self, decision):

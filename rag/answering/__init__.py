@@ -18,6 +18,7 @@ from rag.answering.render import (
     render_clarification,
     render_exact_lookup,
     render_failure,
+    render_general_chat,
     render_refusal,
     render_semantic_answer,
 )
@@ -39,6 +40,7 @@ __all__ = [
     "render_clarification",
     "render_exact_lookup",
     "render_failure",
+    "render_general_chat",
     "render_refusal",
     "render_semantic_answer",
 ]
