@@ -34,6 +34,7 @@ _REQUIRED_RECORD_FIELDS = (
     "article_no",
     "content",
 )
+_SOURCE_TYPES = frozenset({"legal_regulation", "department_rule"})
 
 
 class IndexIntegrityError(ValueError):
@@ -48,6 +49,11 @@ class LegalArticle:
     law_name: str
     article_no: str
     content: str
+    source_type: str = "legal_regulation"
+
+    def __post_init__(self):
+        if self.source_type not in _SOURCE_TYPES:
+            raise ValueError("source_type 必须是 legal_regulation 或 department_rule")
 
 
 class ArticleRepository:
@@ -108,11 +114,17 @@ class ArticleRepository:
                         f"第 {line_number} 行的 chunk_id 与法名、条号不一致"
                     )
                 content = record["content"]
+                source_type = record.get("source_type", "legal_regulation")
+                if source_type not in _SOURCE_TYPES:
+                    raise IndexIntegrityError(
+                        f"第 {line_number} 行的 source_type 无效"
+                    )
                 article = LegalArticle(
                     chunk_id=record["chunk_id"],
                     law_name=record["law_name"],
                     article_no=record["article_no"],
                     content=content,
+                    source_type=source_type,
                 )
                 key = (article.law_name, article.article_no)
                 if key in articles_by_key:

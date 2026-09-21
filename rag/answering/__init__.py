@@ -2,6 +2,8 @@
 
 from rag.answering.evidence import (
     EvidencePackage,
+    EvidenceBundle,
+    EvidenceBundlePackager,
     EvidencePackager,
     EvidencePackagingError,
     MAX_EVIDENCE_ITEMS,
@@ -10,8 +12,11 @@ from rag.answering.evidence import (
 from rag.answering.protocol import (
     ASSISTANT_SCHEMA,
     AnswerProtocolError,
+    RETRY_REASON_INSTRUCTIONS,
+    RETRY_SYSTEM_PROMPT,
     SYSTEM_PROMPT,
     build_answer_prompt,
+    build_retry_answer_prompt,
     parse_and_validate_answer,
 )
 from rag.answering.render import (
@@ -29,13 +34,18 @@ __all__ = [
     "AnswerPromptTokenCounter",
     "AnswerProtocolError",
     "EvidencePackage",
+    "EvidenceBundle",
+    "EvidenceBundlePackager",
     "EvidencePackager",
     "EvidencePackagingError",
     "MAX_EVIDENCE_ITEMS",
     "RAG_MAX_OUTPUT_TOKENS",
     "PromptTokenCountError",
+    "RETRY_REASON_INSTRUCTIONS",
+    "RETRY_SYSTEM_PROMPT",
     "SYSTEM_PROMPT",
     "build_answer_prompt",
+    "build_retry_answer_prompt",
     "parse_and_validate_answer",
     "render_clarification",
     "render_exact_lookup",

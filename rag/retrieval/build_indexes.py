@@ -1,4 +1,4 @@
-"""从 article_index.jsonl 显式构建新 retrieval 索引产物。"""
+"""从 canonical 法条 JSONL 显式构建 retrieval 索引产物。"""
 
 import argparse
 import json
@@ -15,7 +15,7 @@ from rag.retrieval.sparse import (
 
 
 RAG_DIR = Path(__file__).resolve().parents[1]
-DEFAULT_ARTICLE_INDEX = RAG_DIR / "chunk" / "article_index.jsonl"
+DEFAULT_ARTICLE_INDEX = RAG_DIR / "chunk" / "article_index_with_department_rules.jsonl"
 DEFAULT_ARTIFACT_DIR = Path(__file__).resolve().parent / "artifacts"
 
 

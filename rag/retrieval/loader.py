@@ -130,6 +130,7 @@ def load_semantic_retriever(
             batch_size=config.batch_size,
         ),
         config=config,
+        reranker_model_name=reranker_model,
     )
 
 

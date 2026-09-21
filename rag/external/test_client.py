@@ -6,6 +6,7 @@ from unittest.mock import patch
 from rag.external import (
     ExternalLLMError,
     ExternalLLMErrorCode,
+    ExternalLLMResponse,
     OpenAICompatibleLLM,
 )
 
@@ -36,6 +37,15 @@ def response_with_content(content):
     )
 
 
+def response_with_tool_call(arguments='{"query":"盗窃责任"}'):
+    function = SimpleNamespace(name="search_law", arguments=arguments)
+    tool_call = SimpleNamespace(id="call-1", function=function)
+    message = SimpleNamespace(content=None, tool_calls=[tool_call])
+    return SimpleNamespace(
+        choices=[SimpleNamespace(message=message, finish_reason="tool_calls")]
+    )
+
+
 class TestOpenAICompatibleLLM(unittest.TestCase):
     def make_client(self, transport=None):
         return OpenAICompatibleLLM(
@@ -57,6 +67,73 @@ class TestOpenAICompatibleLLM(unittest.TestCase):
         self.assertEqual("deepseek-chat", call["model"])
         self.assertEqual(messages, call["messages"])
         self.assertFalse(call["stream"])
+
+    def test_json_response_format_is_forwarded(self):
+        transport = FakeTransport(response_with_content('{"ok":true}'))
+        client = self.make_client(transport)
+
+        client.generate(
+            [{"role": "user", "content": "输出 JSON"}],
+            temperature=0,
+            max_tokens=32,
+            response_format={"type": "json_object"},
+        )
+
+        self.assertEqual(
+            {"type": "json_object"},
+            transport.chat.completions.calls[0]["response_format"],
+        )
+
+    def test_generate_with_tools_preserves_native_tool_call(self):
+        transport = FakeTransport(response_with_tool_call())
+        client = self.make_client(transport)
+
+        response = client.generate_with_tools(
+            [{"role": "user", "content": "判断是否需要补查"}],
+            tools=({"type": "function", "function": {"name": "search_law"}},),
+            temperature=0,
+            max_tokens=64,
+        )
+
+        self.assertIsInstance(response, ExternalLLMResponse)
+        self.assertEqual("tool_calls", response.finish_reason)
+        self.assertEqual("search_law", response.tool_calls[0].name)
+        call = transport.chat.completions.calls[0]
+        self.assertEqual("required", call["tool_choice"])
+        self.assertFalse(call["stream"])
+        self.assertEqual(
+            {"thinking": {"type": "disabled"}},
+            call["extra_body"],
+        )
+
+    def test_extra_body_is_forwarded_for_thinking_control(self):
+        transport = FakeTransport(response_with_content('{"ok":true}'))
+        client = self.make_client(transport)
+
+        client.generate(
+            [{"role": "user", "content": "输出 JSON"}],
+            temperature=0,
+            max_tokens=32,
+            extra_body={"thinking": {"type": "disabled"}},
+        )
+
+        self.assertEqual(
+            {"thinking": {"type": "disabled"}},
+            transport.chat.completions.calls[0]["extra_body"],
+        )
+
+    def test_invalid_json_response_format_is_rejected(self):
+        transport = FakeTransport(response_with_content("ok"))
+        client = self.make_client(transport)
+        with self.assertRaises(ExternalLLMError) as context:
+            client.generate(
+                [{"role": "user", "content": "问题"}],
+                temperature=0,
+                max_tokens=32,
+                response_format={"type": "text"},
+            )
+        self.assertIs(ExternalLLMErrorCode.INVALID_REQUEST, context.exception.code)
+        self.assertEqual([], transport.chat.completions.calls)
 
     def test_invalid_request_is_rejected_before_transport_call(self):
         transport = FakeTransport(response_with_content("ok"))

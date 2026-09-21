@@ -5,11 +5,17 @@ from rag.external.contracts import (
     ExternalLLM,
     ExternalLLMError,
     ExternalLLMErrorCode,
+    ExternalLLMResponse,
+    ExternalToolCall,
+    generate_json,
 )
 
 __all__ = [
     "ExternalLLM",
     "ExternalLLMError",
     "ExternalLLMErrorCode",
+    "ExternalLLMResponse",
+    "ExternalToolCall",
     "OpenAICompatibleLLM",
+    "generate_json",
 ]

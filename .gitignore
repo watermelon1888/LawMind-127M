@@ -38,9 +38,24 @@ __pycache__/
 *.pyo
 **/tests/
 **/test_*.py
-!rag/query/test_external_analysis.py
-!rag/query/test_task.py
-!rag/query/test_clarification.py
+!minimind/trainer/test_chat_current_law_rag.py
+!rag/query/test_answer_review.py
+!rag/query/test_agentic_retrieval.py
+!rag/query/test_exact_reference.py
+!rag/query/test_query_assessment.py
+!rag/query/test_router_v2.py
+!rag/core/test_contracts.py
+!rag/core/test_legal_rag.py
+!rag/core/test_audit.py
+!rag/app/test_assembly.py
+!rag/eval/test_evidence_unit_ab.py
+!rag/external/test_client.py
+!api/test_main.py
+!gradio_demo/test_app.py
+!rag/knowledge/evidence_unit_repository_test.py
+!rag/knowledge/evidence_units_test.py
+!rag/retrieval/evidence_unit_loader_test.py
+!rag/retrieval/evidence_units_test.py
 **/.pytest-*/
 **/.tmp-test-*/
 /.pytest-tmp/
@@ -79,9 +94,24 @@ pytorch_model*.bin
 /minimind/dataset/CPT/
 /minimind/dataset/QUERY-POOL/
 /minimind/dataset/RAG-SFT/
-/rag/Chinese-Laws/
+/rag/dataset/Chinese-Laws/
 /rag/chunk/article_index.jsonl
+/rag/chunk/article_index_with_department_rules.jsonl
 /rag/eval/eval_set.jsonl
+/rag/eval/*.json
+/rag/eval/*.jsonl
+/rag/eval/*.checkpoint.jsonl
 
 # RAG 构建产物与评测结果
 /rag/eval/results/
+/rag/retrieval/evidence_unit_artifacts/
+/rag/retrieval/artifacts_department_rules/
+
+# 本地向量数据库与临时审查产物
+/resources/
+/tmp_contract_review/
+tmp_sample_candidates_v3.py
+
+# React 前端本地依赖与构建产物
+/frontend/node_modules/
+/frontend/dist/

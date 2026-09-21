@@ -14,10 +14,20 @@ def load_semantic_retriever(*args, **kwargs):
 
     return load(*args, **kwargs)
 
+
+def load_evidence_unit_retriever(*args, **kwargs):
+    """延迟加载父子证据检索器及其重量级模型。"""
+    from rag.retrieval.evidence_unit_loader import (
+        load_evidence_unit_retriever as load,
+    )
+
+    return load(*args, **kwargs)
+
 __all__ = [
     "RankedArticle",
     "RetrievalIntegrityError",
     "SemanticRetrievalConfig",
     "SemanticRetriever",
     "load_semantic_retriever",
+    "load_evidence_unit_retriever",
 ]

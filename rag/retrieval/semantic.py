@@ -15,9 +15,9 @@ class RetrievalIntegrityError(RuntimeError):
 class SemanticRetrievalConfig:
     """开发集参数评估后采用的语义检索运行时配置。"""
 
-    dense_top_k: int = 10
+    dense_top_k: int = 30
     sparse_top_k: int = 30
-    rrf_k: int = 60
+    rrf_k: int = 4
     candidate_pool: int = 20
     top_k: int = 5
     batch_size: int = 32
@@ -86,6 +86,7 @@ class SemanticRetriever:
         article_repository,
         reranker,
         config=SemanticRetrievalConfig(),
+        reranker_model_name=None,
     ):
         for name, value in (
             ("dense_searcher", dense_searcher),
@@ -99,11 +100,29 @@ class SemanticRetriever:
             raise TypeError("reranker 必须提供 score")
         if not isinstance(config, SemanticRetrievalConfig):
             raise TypeError("config 必须是 SemanticRetrievalConfig")
+        if reranker_model_name is not None and (
+            not isinstance(reranker_model_name, str) or not reranker_model_name.strip()
+        ):
+            raise ValueError("reranker_model_name 必须是非空字符串或 None")
         self._dense_searcher = dense_searcher
         self._sparse_searcher = sparse_searcher
         self._article_repository = article_repository
         self._reranker = reranker
         self._config = config
+        self._reranker_model_name = reranker_model_name
+
+    def audit_metadata(self):
+        """返回本次检索链使用的稳定配置，供审计界面展示。"""
+        return {
+            "dense_top_k": self._config.dense_top_k,
+            "bm25_top_k": self._config.sparse_top_k,
+            "rrf_k": self._config.rrf_k,
+            "candidate_pool": self._config.candidate_pool,
+            "reranker_top_k": self._config.top_k,
+            "reranker_model": (
+                self._reranker_model_name or type(self._reranker).__name__
+            ),
+        }
 
     @staticmethod
     def _validate_query(query):

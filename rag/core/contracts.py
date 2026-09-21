@@ -1,14 +1,16 @@
 """法律 RAG 的统一入口契约与跨模块数据结构。"""
 
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional, Tuple
+from typing import Any, Optional, Tuple
 
 
 class BusinessRoute(str, Enum):
     ANSWER = "answer"
     CLARIFY = "clarify"
+    REFUSE = "refuse"
     GENERAL_CHAT = "general_chat"
 
 
@@ -17,19 +19,12 @@ class AnswerMode(str, Enum):
     RETRIEVAL = "retrieval"
 
 
-class LegalTaskType(str, Enum):
-    RULE_LOOKUP = "rule_lookup"
-    CASE_APPLICATION = "case_application"
-
-
 @dataclass(frozen=True)
 class RouteDecision:
     query: str
     route: BusinessRoute
     answer_mode: Optional[AnswerMode] = None
-    task_type: Optional[LegalTaskType] = None
     reason: Optional[str] = None
-    decision_source: str = "deterministic"
 
     def __post_init__(self):
         if not isinstance(self.query, str):
@@ -40,33 +35,19 @@ class RouteDecision:
             self.answer_mode, AnswerMode
         ):
             raise TypeError("answer_mode must be AnswerMode or None")
-        if self.task_type is not None and not isinstance(
-            self.task_type, LegalTaskType
-        ):
-            raise TypeError("task_type must be LegalTaskType or None")
         if self.reason is not None:
             _require_non_blank("reason", self.reason)
-        if self.decision_source not in {"deterministic", "external"}:
-            raise ValueError(
-                "decision_source must be deterministic or external"
-            )
-
         if self.route is not BusinessRoute.ANSWER:
             if self.answer_mode is not None:
                 raise ValueError("non-answer routes cannot carry answer_mode")
-            if self.task_type is not None:
-                raise ValueError("non-answer routes cannot carry task_type")
+            if self.route is BusinessRoute.REFUSE and self.reason is None:
+                raise ValueError("refuse route must carry reason")
             return
 
         if self.answer_mode is None:
             raise ValueError("answer route must carry answer_mode")
         if self.reason is not None:
             raise ValueError("answer routes cannot carry reason")
-        if (
-            self.answer_mode is AnswerMode.EXACT_LOOKUP
-            and self.task_type is not None
-        ):
-            raise ValueError("exact lookup cannot carry task_type")
 
 
 class AnswerStatus(str, Enum):
@@ -167,6 +148,120 @@ class QueryEnhancementTrace:
             raise ValueError("applied 必须携带实际检索 query")
         if self.status is QueryEnhancementStatus.NOT_ATTEMPTED and len(queries) > 1:
             raise ValueError("not_attempted 最多只能执行原始 query")
+
+
+def _freeze_audit_value(value):
+    """将审计明细保存为不可变的可序列化结构。"""
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, Mapping):
+        items = []
+        for key, item in value.items():
+            if not isinstance(key, str) or not key.strip():
+                raise ValueError("audit details 的键必须是非空字符串")
+            items.append((key, _freeze_audit_value(item)))
+        return tuple(sorted(items))
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_audit_value(item) for item in value)
+    raise TypeError("audit details 只能包含 JSON 可序列化值")
+
+
+def _thaw_audit_value(value):
+    if isinstance(value, tuple):
+        if value and all(
+            isinstance(item, tuple) and len(item) == 2 and isinstance(item[0], str)
+            for item in value
+        ):
+            return {key: _thaw_audit_value(item) for key, item in value}
+        return [_thaw_audit_value(item) for item in value]
+    return value
+
+
+@dataclass(frozen=True)
+class AuditEvent:
+    """按实际执行顺序记录的单个审计事件。"""
+
+    stage: str
+    status: str
+    source: Optional[str] = None
+    reason: Optional[str] = None
+    details: Tuple[Tuple[str, Any], ...] = field(default_factory=tuple)
+
+    def __post_init__(self):
+        _require_non_blank("stage", self.stage)
+        _require_non_blank("status", self.status)
+        if self.source is not None:
+            _require_non_blank("source", self.source)
+        if self.reason is not None:
+            _require_non_blank("reason", self.reason)
+        details = (
+            self.details.items()
+            if isinstance(self.details, Mapping)
+            else self.details
+        )
+        normalized = []
+        seen = set()
+        for item in details:
+            if not isinstance(item, (list, tuple)) or len(item) != 2:
+                raise TypeError("audit details 必须由键值对组成")
+            key, value = item
+            if not isinstance(key, str) or not key.strip():
+                raise ValueError("audit details 的键必须是非空字符串")
+            if key in seen:
+                raise ValueError("audit details 不能包含重复键")
+            seen.add(key)
+            normalized.append((key, _freeze_audit_value(value)))
+        object.__setattr__(self, "details", tuple(sorted(normalized)))
+
+    def to_dict(self):
+        """返回适合 JSON 序列化的审计事件。"""
+        return {
+            "stage": self.stage,
+            "status": self.status,
+            "source": self.source,
+            "reason": self.reason,
+            "details": {
+                key: _thaw_audit_value(value) for key, value in self.details
+            },
+        }
+
+
+@dataclass(frozen=True)
+class AuditTrace:
+    """从请求接入到最终结果的有序审计链。"""
+
+    trace_id: str
+    events: Tuple[AuditEvent, ...] = field(default_factory=tuple)
+    final_route: Optional[BusinessRoute] = None
+    final_status: Optional[AnswerStatus] = None
+
+    def __post_init__(self):
+        _require_non_blank("trace_id", self.trace_id)
+        events = tuple(self.events)
+        if any(not isinstance(item, AuditEvent) for item in events):
+            raise TypeError("events 中的元素必须是 AuditEvent")
+        object.__setattr__(self, "events", events)
+        if self.final_route is not None and not isinstance(
+            self.final_route, BusinessRoute
+        ):
+            raise TypeError("final_route 必须是 BusinessRoute 或 None")
+        if self.final_status is not None and not isinstance(
+            self.final_status, AnswerStatus
+        ):
+            raise TypeError("final_status 必须是 AnswerStatus 或 None")
+
+    def to_dict(self):
+        """返回适合 JSON 序列化的完整审计链。"""
+        return {
+            "trace_id": self.trace_id,
+            "events": [event.to_dict() for event in self.events],
+            "final_route": (
+                None if self.final_route is None else self.final_route.value
+            ),
+            "final_status": None
+            if self.final_status is None
+            else self.final_status.value,
+        }
 
 
 @dataclass(frozen=True)
@@ -279,9 +374,11 @@ class LegalRAGResult:
     diagnostic_code: Optional[str] = None
     evidence: Tuple[Evidence, ...] = field(default_factory=tuple)
     model_answer: Optional[ModelAnswer] = None
+    candidate_answer: Optional[str] = None
     query_enhancement: QueryEnhancementTrace = field(
         default_factory=QueryEnhancementTrace
     )
+    audit_trace: AuditTrace = field(default_factory=lambda: AuditTrace("untracked"))
 
     def __post_init__(self):
         if not isinstance(self.query, str):
@@ -321,8 +418,12 @@ class LegalRAGResult:
             self.model_answer, ModelAnswer
         ):
             raise TypeError("model_answer 必须是 ModelAnswer 或 None")
+        if self.candidate_answer is not None:
+            _require_non_blank("candidate_answer", self.candidate_answer)
         if not isinstance(self.query_enhancement, QueryEnhancementTrace):
             raise TypeError("query_enhancement 必须是 QueryEnhancementTrace")
+        if not isinstance(self.audit_trace, AuditTrace):
+            raise TypeError("audit_trace 必须是 AuditTrace")
 
 
 class LegalRAG(ABC):
@@ -335,13 +436,14 @@ class LegalRAG(ABC):
 
 
 __all__ = [
+    "AuditEvent",
+    "AuditTrace",
     "AnswerMode",
     "AnswerStatus",
     "BusinessRoute",
     "Evidence",
     "LegalRAG",
     "LegalRAGResult",
-    "LegalTaskType",
     "ModelAnswer",
     "QueryEnhancementFailureReason",
     "QueryEnhancementStatus",

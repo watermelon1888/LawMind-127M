@@ -2,7 +2,7 @@
 
 ## 模块定位
 
-`answering` 负责把有序完整法条转换为受上下文预算约束的模型证据包，构造法律回答 prompt，严格校验模型的两字段 JSON，并把可信内部对象渲染为稳定中文回答。程序控制证据身份、格式和引用映射；模型收到非空证据包后生成一至三个短句，用于完整回答紧密相关事项，并选择实际支持这些结论的最小充分证据集合。
+`answering` 负责把有序法条证据转换为受上下文预算约束的模型证据包，构造法律回答 prompt，严格校验模型的两字段 JSON，并把可信内部对象渲染为稳定中文回答。程序控制证据身份、格式和引用映射；模型收到非空证据包后生成最多两句归纳，用于回答问题直接询问的事项，并选择实际支持结论的证据集合。
 
 Query 增强完全位于 answering 上游。无论候选来自原始单 query 还是多 query 融合，answering 只能看到用户原始问题和最终有序 canonical 法条；rewrite、expansion terms、subqueries、RRF/rerank 分数和 `QueryEnhancementTrace` 均不进入 `EvidencePackage`、prompt 或中文渲染。
 
@@ -10,7 +10,7 @@ Query 增强完全位于 answering 上游。无论候选来自原始单 query �
 
 ```text
 rag/answering/
-├── evidence.py    # 构造完整法条证据包并执行 prompt 预算选择
+├── evidence.py    # 构造完整法条或父子压缩证据包并执行 prompt 预算选择
 ├── protocol.py    # 定义固定 prompt 与严格两字段模型输出协议
 ├── token_count.py # 使用实际 MiniMind chat template 计算完整 prompt 长度
 ├── render.py      # 渲染精确查条、语义回答、澄清、拒答和处理失败
@@ -22,7 +22,7 @@ rag/answering/
 ### 已实现
 
 - 将有序 `LegalArticle` 投影为不可变 `EvidencePackage`；
-- 在真实 prompt token 预算内选择 retrieval 前五条完整法条的最大有序前缀；
+- 在真实 prompt token 预算内按顺序选择 retrieval 前五条中可完整容纳的法条；
 - 为单次模型请求分配 `E1`、`E2` 等临时证据编号；
 - 构造固定 system prompt 和紧凑 user JSON；
 - 严格解析并校验 `summary / citations` 两字段 JSON；
@@ -37,12 +37,12 @@ rag/answering/
 
 ### 当前限制
 
-- 证据包考虑 retrieval 返回的全部前五条候选，并按原顺序选择完整前缀；
+- 证据包考虑 retrieval 返回的前五条候选，并按原顺序选择可完整容纳的法条；
 - 不启用 excerpt selector，每条模型证据只有一个完整法条正文；
-- 首条完整法条也无法装入上下文时直接构包失败，不裁剪正文；
+- 单条完整法条超出上下文时跳过并继续尝试后续候选；全部候选均无法装入时构包失败，不裁剪正文；
 - 默认预留 150 个输出 token；旧 RAG-SFT 的 833 条目标投影为两字段后，目标正文 token 的 p95、p99、最大值分别为 108、125、143。150 比历史最大目标多 7 tokens，但当前仍缺少两字段回答模型的真实生成长度和触顶率，因此该值需要在模型评估中重点复核；实际上下文上限由应用创建 `EvidencePackager` 时传入；
 - prompt 协议要求模型稳定输出严格 JSON，格式不合法会进入处理失败而不是尝试修复；
-- 模型一次只输出一个原子化法律结论，多事项问题暂不保证在一次响应中完整回答；
+- prompt 要求模型在最多两句内逐项回答，但 127M 模型仍可能遗漏多事项问题中的部分要求；
 - 程序不判断非空证据包是完整、部分还是无支持；必要证据缺失时，模型可能形成不完整回答；
 - 当前中文渲染是固定程序结构，不提供自由格式回答样式。
 
@@ -94,16 +94,16 @@ rag/answering/
 EvidencePackager.build(query, articles) -> (EvidencePackage, prompt_tokens)
 ```
 
-构造器接收 `context_limit`、`max_output_tokens` 和 `count_prompt_tokens`。`build()` 考虑 retrieval 返回的前五条候选，返回能完整装入预算的最大有序前缀及实际 prompt token 数。重复候选、无效计数或首候选超预算会抛出 `EvidencePackagingError`。
+构造器接收 `context_limit`、`max_output_tokens` 和 `count_prompt_tokens`。`build()` 考虑 retrieval 返回的前五条候选，按原顺序返回能完整装入预算的法条及实际 prompt token 数；单条超预算时跳过并继续尝试后续候选。重复候选、无效计数或全部候选超预算会抛出 `EvidencePackagingError`。
 
 ### ModelAnswer
 
-`ModelAnswer` 由 core 定义，是通过协议校验后的原子法律结论：
+`ModelAnswer` 由 core 定义，是通过协议校验后的法律回答归纳：
 
 
 | 字段          | 含义             | 关键约束                         |
 | ----------- | -------------- | ---------------------------- |
-| `summary`   | 单个原子化法律结论     | 非空、单行，不包含法名、条号或 Markdown     |
+| `summary`   | 法律回答归纳         | 非空、单行，不包含 Markdown；法名与条号仅作为生成偏好 |
 | `citations` | 支持该结论的证据编号集合 | 非空、非重复，只能引用当前 EvidencePackage |
 
 
@@ -130,7 +130,7 @@ render_failure(diagnostic_code) -> RenderedAnswer
     原始 query + retrieval 已完成单/多 query 排序的完整 LegalArticle
         -> [1] 接收有序完整法条
             -> retrieval 候选前五条
-        -> [2] 选择预算内最大完整前缀
+        -> [2] 按顺序选择预算内完整法条
             -> EvidencePackage + 实际 prompt token 数
         -> [3] 生成唯一模型视图
             -> 带 E1...En 临时编号的 user JSON
@@ -153,10 +153,10 @@ render_failure(diagnostic_code) -> RenderedAnswer
   - 位置：`evidence.py::EvidencePackager.build()`
   - 对象：query、`Sequence[LegalArticle]` -> retrieval 候选前五条
   - 行为：保持 retrieval 最终顺序，拒绝重复 `chunk_id`，不重新排序或读取检索分数；只使用原始 query，不接收任何 Query 增强中间字段或 trace。
-2. **选择预算内最大完整前缀**
+2. **按顺序选择预算内完整法条**
   - 位置：`evidence.py::EvidencePackager.build()`
   - 对象：候选法条 -> `EvidencePackage`
-  - 行为：逐条加入完整正文并计算完整 prompt token；首次超预算时停止，已入选法条保持不变。
+  - 行为：逐条加入完整正文并计算完整 prompt token；当前法条超预算时跳过，继续尝试后续候选，已入选法条保持不变。
 3. **生成唯一模型视图**
   - 位置：`evidence.py::EvidencePackage.to_model_json()`
   - 对象：`EvidencePackage` -> 紧凑 user JSON
@@ -201,12 +201,12 @@ render_failure(diagnostic_code) -> RenderedAnswer
 
 
 
-#### 最大有序前缀
+#### 按序选择可容纳法条
 
 - **要解决的问题**：retrieval 已经给出相关性顺序，但上下文无法保证容纳全部候选。
-- **当前选择**：检查 retrieval 返回的前五条，逐条测量完整 prompt，保留能装入预算的最大有序前缀。
-- **选择理由**：算法确定、可复现，不重新解释检索分数，也不会从中间跳过一条再拼接后续法条。
-- **影响与限制**：高排名长法条可能阻止后续短法条进入；当前优先保持排序语义和证据完整性。
+- **当前选择**：检查 retrieval 返回的前五条，逐条测量完整 prompt；当前法条放不下时跳过，继续尝试后续候选。
+- **选择理由**：算法确定、可复现，不重新解释检索分数，同时避免单条过长证据阻断后续可用法条。
+- **影响与限制**：入选法条仍保持原相对顺序；完整性优先于候选数量，任何正文都不会被裁剪。
 
 
 
@@ -245,12 +245,12 @@ render_failure(diagnostic_code) -> RenderedAnswer
 
 
 
-#### 原子结论与非空引用
+#### 单行归纳与非空引用
 
 - **要解决的问题**：一次响应包含多个独立事项会使扁平 citations 无法表达每个结论的证据归属。
-- **当前选择**：每次只允许一个非空单行原子法律结论，并要求至少一个合法 citation；一个结论可以由一条或多条证据共同支持。
-- **选择理由**：保持 `summary + citations` 协议简单，同时让 citations 表示支持当前结论所必需的证据集合。
-- **影响与限制**：程序只能校验结构和引用范围，不能自动证明结论原子性或语义支持关系；多事项问题暂不保证一次完整回答。
+- **当前选择**：要求一个非空单行 `summary` 和至少一个合法 citation；prompt 要求最多两句并逐项回答问题。
+- **选择理由**：保持 `summary + citations` 协议简单，同时让 citations 表示支持当前归纳所需的证据集合。
+- **影响与限制**：程序只硬校验 JSON、字段、单行、Markdown 和 citation 范围，不能自动证明长度、语义支持或多事项完整性；法名与条号限制只作为生成偏好。
 
 
 

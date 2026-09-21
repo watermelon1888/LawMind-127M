@@ -75,7 +75,7 @@ def render_semantic_answer(package, answer):
     cited_positions = {int(citation[1:]) - 1 for citation in answer.citations}
     selected = tuple(
         _render_evidence(item)
-        for index, item in enumerate(package.evidence)
+        for index, item in enumerate(package.display_evidence)
         if index in cited_positions
     )
     return RenderedAnswer(evidence=selected, summary=answer.summary)

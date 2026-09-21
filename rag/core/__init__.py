@@ -1,13 +1,14 @@
 """法律 RAG 的公共契约与总编排接口。"""
 
 from rag.core.contracts import (
+    AuditEvent,
+    AuditTrace,
     AnswerMode,
     AnswerStatus,
     BusinessRoute,
     Evidence,
     LegalRAG,
     LegalRAGResult,
-    LegalTaskType,
     ModelAnswer,
     QueryEnhancementFailureReason,
     QueryEnhancementStatus,
@@ -17,7 +18,6 @@ from rag.core.contracts import (
     RouteDecision,
     UnansweredReason,
 )
-from rag.core.answerability import AnswerabilityDecision, decide_answerability
 
 
 def __getattr__(name):
@@ -30,16 +30,15 @@ def __getattr__(name):
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 __all__ = [
-    "AnswerabilityDecision",
     "AnswerMode",
     "AnswerStatus",
+    "AuditEvent",
+    "AuditTrace",
     "BusinessRoute",
     "CurrentLawRAG",
-    "decide_answerability",
     "Evidence",
     "LegalRAG",
     "LegalRAGResult",
-    "LegalTaskType",
     "ModelAnswer",
     "QueryEnhancementFailureReason",
     "QueryEnhancementStatus",
