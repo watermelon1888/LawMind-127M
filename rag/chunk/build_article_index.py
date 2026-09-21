@@ -1,6 +1,6 @@
 """
 Step 1: 全量法条提取脚本（v3 — 完整 11 字段 schema）
-遍历 rag/Chinese-Laws/ 下所有 .docx，逐条提取法条元数据 → article_index.jsonl
+遍历 rag/dataset/Chinese-Laws/ 下所有 .docx，逐条提取法条元数据 → article_index.jsonl
 
 Schema 定义见 SCHEMA.md。每个 chunk 包含：
   chunk_id, law_name, article_no, article_no_sort_key,
@@ -14,7 +14,7 @@ from docx2txt import process as docx2txt_process
 
 #定位输入和输出目录
 BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-LAW_DIR = os.path.join(BASE, "Chinese-Laws")
+LAW_DIR = os.path.join(BASE, "dataset", "Chinese-Laws")
 OUTPUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "article_index.jsonl")#产物路径
 
 # ============================================================

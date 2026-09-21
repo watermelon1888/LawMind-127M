@@ -30,6 +30,116 @@ from transformers import PreTrainedModel, GenerationMixin, PretrainedConfig
 from transformers.modeling_outputs import MoeCausalLMOutputWithPast
 
 
+def _has_repeated_tail(token_ids, *, repeat_count=3, min_ngram_size=2, max_ngram_size=64):
+    """判断序列尾部是否连续重复同一片段。"""
+    values = token_ids.tolist() if torch.is_tensor(token_ids) else list(token_ids)
+    if repeat_count < 2 or len(values) < min_ngram_size * repeat_count:
+        return False
+    upper = min(max_ngram_size, len(values) // repeat_count)
+    for ngram_size in range(upper, min_ngram_size - 1, -1):
+        suffix = values[-ngram_size:]
+        repeats = 1
+        cursor = len(values) - ngram_size
+        while cursor >= ngram_size and values[cursor - ngram_size:cursor] == suffix:
+            repeats += 1
+            cursor -= ngram_size
+        if repeats >= repeat_count:
+            return True
+    return False
+
+
+def _apply_generated_repetition_penalties(
+    logits,
+    generated_token_ids,
+    *,
+    frequency_penalty=0.0,
+    repetition_path_penalty=0.0,
+    repetition_path_min_ngram_size=4,
+    repetition_path_max_ngram_size=12,
+):
+    """只根据已生成 token 对高频 token 和重复路径进行软降权。"""
+    if frequency_penalty < 0 or repetition_path_penalty < 0:
+        raise ValueError("重复惩罚必须是非负数")
+    if repetition_path_min_ngram_size < 2:
+        raise ValueError("重复路径最小 n-gram 必须至少为 2")
+    if repetition_path_max_ngram_size < repetition_path_min_ngram_size:
+        raise ValueError("重复路径最大 n-gram 不能小于最小 n-gram")
+    if generated_token_ids.ndim != 2 or logits.ndim != 2:
+        raise ValueError("logits 和 generated_token_ids 必须是二维张量")
+    if logits.shape[0] != generated_token_ids.shape[0]:
+        raise ValueError("logits 与 generated_token_ids 的 batch 大小必须一致")
+
+    for batch_index in range(logits.shape[0]):
+        sequence = generated_token_ids[batch_index]
+        if frequency_penalty and sequence.numel():
+            counts = torch.bincount(sequence, minlength=logits.shape[-1])
+            repeated = torch.nonzero(counts > 1, as_tuple=False).flatten()
+            if repeated.numel():
+                logits[batch_index, repeated] -= (
+                    counts[repeated].to(logits.dtype) - 1
+                ) * frequency_penalty
+
+        if not repetition_path_penalty or sequence.numel() < 2:
+            continue
+        values = sequence.tolist()
+        upper = min(repetition_path_max_ngram_size, len(values) + 1)
+        penalized = set()
+        for ngram_size in range(repetition_path_min_ngram_size, upper + 1):
+            prefix = tuple(values[-(ngram_size - 1):])
+            for start in range(len(values) - ngram_size + 1):
+                if tuple(values[start:start + ngram_size - 1]) == prefix:
+                    penalized.add(values[start + ngram_size - 1])
+        if penalized:
+            token_ids = torch.tensor(
+                tuple(penalized), device=logits.device, dtype=torch.long
+            )
+            logits[batch_index, token_ids] -= repetition_path_penalty
+    return logits
+
+
+def _contrastive_search_scores(
+    candidate_probabilities,
+    candidate_hidden_states,
+    generated_hidden_states,
+    *,
+    penalty_alpha,
+):
+    """按标准 Contrastive Search 公式计算候选分数。"""
+    if not 0 < penalty_alpha < 1:
+        raise ValueError("penalty_alpha 必须位于 0 和 1 之间")
+    if candidate_probabilities.ndim != 2 or candidate_hidden_states.ndim != 3:
+        raise ValueError("候选概率和候选隐藏状态维度不合法")
+    if candidate_probabilities.shape[:2] != candidate_hidden_states.shape[:2]:
+        raise ValueError("候选概率与候选隐藏状态形状不一致")
+    if generated_hidden_states is None or generated_hidden_states.shape[1] == 0:
+        return (1.0 - penalty_alpha) * candidate_probabilities
+    if generated_hidden_states.ndim != 3:
+        raise ValueError("generated_hidden_states 必须是三维张量")
+    if (
+        generated_hidden_states.shape[0] != candidate_hidden_states.shape[0]
+        or generated_hidden_states.shape[2] != candidate_hidden_states.shape[2]
+    ):
+        raise ValueError("候选隐藏状态与生成历史形状不一致")
+
+    normalized_candidates = F.normalize(candidate_hidden_states.float(), dim=-1)
+    normalized_history = F.normalize(generated_hidden_states.float(), dim=-1)
+    degeneration_penalty = torch.einsum(
+        "bkh,bgh->bkg", normalized_candidates, normalized_history
+    ).amax(dim=-1)
+    return (
+        (1.0 - penalty_alpha) * candidate_probabilities.float()
+        - penalty_alpha * degeneration_penalty
+    )
+
+
+def _repeat_past_key_values(past_key_values, repeats):
+    """沿 batch 维复制 KV cache，供同一步的多个候选共享上下文。"""
+    return [
+        tuple(value.repeat_interleave(repeats, dim=0) for value in layer)
+        for layer in past_key_values
+    ]
+
+
 # ============================================================================
 # MiniMindConfig — 模型配置，兼容 HuggingFace PretrainedConfig
 # ============================================================================
@@ -664,7 +774,12 @@ class MiniMindForCausalLM(PreTrainedModel, GenerationMixin):
     def generate(self, inputs=None, attention_mask=None, max_new_tokens=8192,
                  temperature=0.85, top_p=0.85, top_k=50, eos_token_id=2,
                  streamer=None, use_cache=True, num_return_sequences=1,
-                 do_sample=True, repetition_penalty=1.0, **kwargs):
+                 do_sample=True, repetition_penalty=1.0, no_repeat_ngram_size=0,
+                 repetition_control_start_tokens=0, repetition_tail_repeat_count=0,
+                 frequency_penalty=0.0, repetition_path_penalty=0.0,
+                 repetition_path_min_ngram_size=4,
+                 repetition_path_max_ngram_size=12, penalty_alpha=0.0,
+                 contrastive_search_top_k=0, **kwargs):
         """
         自回归生成：逐 token 预测，每次把新 token 拼回输入，直到达到最大长度或全部结束。
 
@@ -672,7 +787,14 @@ class MiniMindForCausalLM(PreTrainedModel, GenerationMixin):
           temperature:         缩放 logits。0.85 → 概率分布更尖锐（更确定），>1.0 → 更平坦（更随机）
           top_k:               只保留概率最高的 K 个 token，其余置为 -inf（硬截断）
           top_p (nucleus):     从高到低累加概率，超过 p 后的 token 全部置为 -inf（动态截断）
-          repetition_penalty:  >1 降低已出现 token 的概率，避免重复。=1 不生效
+          repetition_penalty:  >1 降低当前回答中已生成 token 的概率，避免重复。=1 不生效
+          no_repeat_ngram_size: 禁止当前回答重复生成指定长度的 n-gram；0 表示关闭
+          repetition_control_start_tokens: 生成达到该长度后再启用上述两项控制
+          repetition_tail_repeat_count: 尾部同一片段连续重复达到该次数时提前结束；0 表示关闭
+          frequency_penalty: 生成 token 第三次出现前开始按频次软降权；0 表示关闭
+          repetition_path_penalty: 对继续既有重复路径的候选 token 软降权；0 表示关闭
+          penalty_alpha: Contrastive Search 的退化惩罚权重；0 表示关闭
+          contrastive_search_top_k: Contrastive Search 每步参与比较的候选数
           do_sample:           True=从分布采样，False=贪心取最大（temperature 设为 1.0 即等价 greedy）
           streamer:            是一个流式输出工具，让生成的 token 逐字往外吐，而不是等全部生成完才一次性返回
           num_return_sequences:控制一次返回几条不同的生成结果。默认是 1。        
@@ -684,8 +806,22 @@ class MiniMindForCausalLM(PreTrainedModel, GenerationMixin):
         """
         # 初始化
         input_ids = kwargs.pop("input_ids", inputs).repeat(num_return_sequences, 1)
+        prompt_length = input_ids.shape[1]
+        contrastive_enabled = penalty_alpha != 0 or contrastive_search_top_k != 0
+        if contrastive_enabled:
+            if not 0 < penalty_alpha < 1:
+                raise ValueError("启用 Contrastive Search 时 penalty_alpha 必须位于 0 和 1 之间")
+            if not isinstance(contrastive_search_top_k, int) or isinstance(
+                contrastive_search_top_k, bool
+            ) or contrastive_search_top_k < 2:
+                raise ValueError("contrastive_search_top_k 必须是至少为 2 的整数")
+            if do_sample:
+                raise ValueError("Contrastive Search 不支持 do_sample=True")
+            if not use_cache:
+                raise ValueError("Contrastive Search 必须启用 KV cache")
         attention_mask = attention_mask.repeat(num_return_sequences, 1) if attention_mask is not None else None
         past_key_values = kwargs.pop("past_key_values", None)
+        generated_hidden_states = None
         # finished[i]=True 表示第 i 条序列已经生成了 eos，后续只需填充
         finished = torch.zeros(input_ids.shape[0], dtype=torch.bool, device=input_ids.device)
 
@@ -711,43 +847,123 @@ class MiniMindForCausalLM(PreTrainedModel, GenerationMixin):
 
             # 只取最后一个位置（最新 token）的 logits，除以 temperature 控制随机性
             logits = outputs.logits[:, -1, :] / temperature
+            generated_length = input_ids.shape[1] - prompt_length
+            repetition_controls_enabled = (
+                generated_length >= int(repetition_control_start_tokens)
+            )
 
-            # === repetition_penalty: 降低已出现 token 的概率 ===
-            # 对每条序列，找出已出现过的 token 集合，压低它们的得分
+            # === repetition_penalty: 降低回答中已生成 token 的概率 ===
+            # prompt 包含协议字段和示例，不能参与惩罚，否则会破坏结构化输出。
             # score > 0 (模型喜欢) → 除以 penalty → 值变小 → 更不容易被选中
             # score < 0 (模型讨厌) → 乘以 penalty → 更负 → 更讨厌
-            if repetition_penalty != 1.0:
+            if repetition_controls_enabled and repetition_penalty != 1.0:
                 for i in range(input_ids.shape[0]):
-                    seen = torch.unique(input_ids[i])           # 第 i 条序列里已出现的 token
+                    seen = torch.unique(input_ids[i, prompt_length:])
+                    if seen.numel() == 0:
+                        continue
                     score = logits[i, seen]                     # 这些 token 的当前得分
                     logits[i, seen] = torch.where(
                         score > 0, score / repetition_penalty, score * repetition_penalty
                     )
 
+            if frequency_penalty or repetition_path_penalty:
+                logits = _apply_generated_repetition_penalties(
+                    logits,
+                    input_ids[:, prompt_length:],
+                    frequency_penalty=frequency_penalty,
+                    repetition_path_penalty=repetition_path_penalty,
+                    repetition_path_min_ngram_size=repetition_path_min_ngram_size,
+                    repetition_path_max_ngram_size=repetition_path_max_ngram_size,
+                )
+
             # === top-k: 只保留得分最高的 K 个候选 ===
             # 找到第 K 大的值作为阈值，比它小的全部置为 -inf（exp(-inf)=0，不可能被采样）
-            if top_k > 0:
-                logits[logits < torch.topk(logits, top_k)[0][..., -1, None]] = -float('inf')
+            # === no_repeat_ngram：禁止复现当前回答已经生成过的 n-gram ===
+            if repetition_controls_enabled and no_repeat_ngram_size and no_repeat_ngram_size > 0:
+                ngram_size = int(no_repeat_ngram_size)
+                if generated_length >= ngram_size:
+                    for i in range(input_ids.shape[0]):
+                        sequence = input_ids[i, prompt_length:].tolist()
+                        prefix = tuple(sequence[-(ngram_size - 1):]) if ngram_size > 1 else ()
+                        banned = {
+                            sequence[start + ngram_size - 1]
+                            for start in range(len(sequence) - ngram_size + 1)
+                            if tuple(sequence[start:start + ngram_size - 1]) == prefix
+                        }
+                        if eos_token_id is not None:
+                            banned.discard(int(eos_token_id))
+                        if banned:
+                            banned_ids = torch.tensor(tuple(banned), device=logits.device, dtype=torch.long)
+                            logits[i, banned_ids] = -float("inf")
+                            if not torch.isfinite(logits[i]).any() and eos_token_id is not None:
+                                logits[i, int(eos_token_id)] = 0.0
 
-            # === top-p (nucleus sampling): 动态截断 ===
-            # 从最高分往低分累加 softmax 概率，超过 p 后的 token 全部排除
-            # 相比 top-k，top-p 能自适应地选择候选数量（分布尖锐时选得少，平坦时选得多）
-            if top_p < 1.0:
-                sorted_logits, sorted_indices = torch.sort(logits, descending=True)
-                # cumsum(softmax): 累积概率。例如 [0.5, 0.3, 0.1, 0.1] → [0.5, 0.8, 0.9, 1.0]
-                mask = torch.cumsum(torch.softmax(sorted_logits, dim=-1), dim=-1) > top_p
-                # 至少保留一个 token（即使它自己的概率就超过 p）
-                mask[..., 1:] = mask[..., :-1].clone()  # 右移一位：每个位置取其前一个位置的标记
-                mask[..., 0] = 0                         # 第一个 token 始终保留（得分最高）
-                # 把 mask 映射回原始索引顺序，然后置 -inf
-                logits[mask.scatter(1, sorted_indices, mask)] = -float('inf')
+            selected_hidden_state = None
+            if contrastive_enabled:
+                candidate_count = min(contrastive_search_top_k, logits.shape[-1])
+                probabilities = torch.softmax(logits.float(), dim=-1)
+                candidate_probabilities, candidate_ids = torch.topk(
+                    probabilities, candidate_count, dim=-1
+                )
+                candidate_outputs = self.forward(
+                    candidate_ids.reshape(-1, 1),
+                    (
+                        attention_mask.repeat_interleave(candidate_count, dim=0)
+                        if attention_mask is not None
+                        else None
+                    ),
+                    _repeat_past_key_values(
+                        outputs.past_key_values, candidate_count
+                    ),
+                    use_cache=True,
+                    **kwargs,
+                )
+                candidate_hidden_states = candidate_outputs.hidden_states[:, -1, :].reshape(
+                    input_ids.shape[0], candidate_count, -1
+                )
+                contrastive_scores = _contrastive_search_scores(
+                    candidate_probabilities,
+                    candidate_hidden_states,
+                    generated_hidden_states,
+                    penalty_alpha=penalty_alpha,
+                )
+                selected_positions = contrastive_scores.argmax(dim=-1, keepdim=True)
+                next_token = candidate_ids.gather(1, selected_positions)
+                selected_hidden_state = candidate_hidden_states.gather(
+                    1,
+                    selected_positions.unsqueeze(-1).expand(
+                        -1, -1, candidate_hidden_states.shape[-1]
+                    ),
+                )
+            else:
+                # === top-k: 只保留得分最高的 K 个候选 ===
+                if 0 < top_k < logits.shape[-1]:
+                    logits[logits < torch.topk(logits, top_k)[0][..., -1, None]] = -float('inf')
 
-            # === 从过滤后的分布中采样 ===
-            next_token = (
-                torch.multinomial(torch.softmax(logits, dim=-1), num_samples=1)  # 按概率采样
-                if do_sample else torch.argmax(logits, dim=-1, keepdim=True)     # 贪心
-            )
+                # === top-p (nucleus sampling): 动态截断 ===
+                if top_p < 1.0:
+                    sorted_logits, sorted_indices = torch.sort(logits, descending=True)
+                    mask = torch.cumsum(torch.softmax(sorted_logits, dim=-1), dim=-1) > top_p
+                    mask[..., 1:] = mask[..., :-1].clone()
+                    mask[..., 0] = 0
+                    logits[mask.scatter(1, sorted_indices, mask)] = -float('inf')
 
+                next_token = (
+                    torch.multinomial(torch.softmax(logits, dim=-1), num_samples=1)
+                    if do_sample else torch.argmax(logits, dim=-1, keepdim=True)
+                )
+
+            # === 重复尾部早停：避免重复片段继续写入输出 ===
+            tail_finished = torch.zeros_like(finished)
+            if repetition_tail_repeat_count and repetition_tail_repeat_count > 1:
+                for i in range(input_ids.shape[0]):
+                    if finished[i]:
+                        continue
+                    candidate = torch.cat((input_ids[i, prompt_length:], next_token[i]))
+                    if _has_repeated_tail(candidate, repeat_count=int(repetition_tail_repeat_count)):
+                        tail_finished[i] = True
+                        if eos_token_id is not None:
+                            next_token[i] = next_token.new_tensor([eos_token_id])
             # 已结束的序列，统一填充 eos（避免模型继续产生无意义的输出）
             if eos_token_id is not None:
                 next_token = torch.where(
@@ -759,6 +975,14 @@ class MiniMindForCausalLM(PreTrainedModel, GenerationMixin):
             # 拼接新 token 到序列末尾
             input_ids = torch.cat([input_ids, next_token], dim=-1)
             past_key_values = outputs.past_key_values if use_cache else None
+            if selected_hidden_state is not None:
+                generated_hidden_states = (
+                    selected_hidden_state
+                    if generated_hidden_states is None
+                    else torch.cat(
+                        (generated_hidden_states, selected_hidden_state), dim=1
+                    )
+                )
 
             if streamer:
                 streamer.put(next_token.cpu())
@@ -767,8 +991,9 @@ class MiniMindForCausalLM(PreTrainedModel, GenerationMixin):
             # 全部 finished 时提前退出，不等 max_new_tokens 耗尽
             if eos_token_id is not None:
                 finished |= next_token.squeeze(-1).eq(eos_token_id)
-                if finished.all():
-                    break
+            finished |= tail_finished
+            if finished.all():
+                break
 
         if streamer:
             streamer.end()

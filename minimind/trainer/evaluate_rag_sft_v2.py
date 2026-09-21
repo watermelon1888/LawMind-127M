@@ -217,6 +217,10 @@ def evaluate_records(
     tokenizer: Any,
     device: torch.device,
     context_limit_override: int | None = None,
+    repetition_penalty: float = 1.0,
+    no_repeat_ngram_size: int = 0,
+    repetition_control_start_tokens: int = 0,
+    repetition_tail_repeat_count: int = 0,
 ) -> list[dict[str, Any]]:
     model.eval()
     outputs = []
@@ -238,6 +242,11 @@ def evaluate_records(
                 attention_mask=torch.ones_like(input_ids),
                 max_new_tokens=MAX_NEW_TOKENS,
                 do_sample=False,
+                repetition_penalty=repetition_penalty,
+                no_repeat_ngram_size=no_repeat_ngram_size,
+                repetition_control_start_tokens=repetition_control_start_tokens,
+                repetition_tail_repeat_count=repetition_tail_repeat_count,
+                eos_token_id=getattr(tokenizer, "eos_token_id", None),
                 use_cache=True,
             )
             raw_text = tokenizer.decode(generated[0, input_ids.shape[1] :], skip_special_tokens=True)
@@ -345,7 +354,7 @@ def summarize(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     return summary
 
 
-def run_evaluation(*, cases_manifest: str | Path, cases: str | Path | None, tokenizer_path: str | Path, weights: str | Path, weights_sha256: str, output: str | Path, device_name: str = "cuda:0") -> dict[str, Any]:
+def run_evaluation(*, cases_manifest: str | Path, cases: str | Path | None, tokenizer_path: str | Path, weights: str | Path, weights_sha256: str, output: str | Path, device_name: str = "cuda:0", repetition_penalty: float = 1.0, no_repeat_ngram_size: int = 0, repetition_control_start_tokens: int = 0, repetition_tail_repeat_count: int = 0) -> dict[str, Any]:
     records, records_identity = _load_cases(cases_manifest, cases)
     tokenizer = base_entry._load_tokenizer(tokenizer_path)
     tokenizer_identity = _tokenizer_identity(tokenizer, tokenizer_path)
@@ -356,7 +365,16 @@ def run_evaluation(*, cases_manifest: str | Path, cases: str | Path | None, toke
         raise RuntimeError("指定 CUDA 但当前无可用 GPU")
     model = base_entry.MiniMindForCausalLM(base_entry._model_config()).to(device)
     actual_weights_sha256 = base_entry._load_parent_weights(weights, weights_sha256, model)
-    results = evaluate_records(records, model=model, tokenizer=tokenizer, device=device)
+    results = evaluate_records(
+        records,
+        model=model,
+        tokenizer=tokenizer,
+        device=device,
+        repetition_penalty=repetition_penalty,
+        no_repeat_ngram_size=no_repeat_ngram_size,
+        repetition_control_start_tokens=repetition_control_start_tokens,
+        repetition_tail_repeat_count=repetition_tail_repeat_count,
+    )
     source_paths = {
         "evaluation": Path(__file__).resolve(),
         "protocol": Path(__file__).resolve().parents[2] / "rag" / "answering" / "protocol.py",
@@ -366,7 +384,7 @@ def run_evaluation(*, cases_manifest: str | Path, cases: str | Path | None, toke
         name: {"path": str(path), "bytes": path.stat().st_size, "sha256": _sha256_file(path)}
         for name, path in source_paths.items()
     }
-    report = {"schema_version": "1.0", "pipeline": PIPELINE, "inputs": {"evaluation": records_identity, "weights_sha256": actual_weights_sha256, "tokenizer": tokenizer_identity, "source_identities": source_identities}, "generation": {"max_new_tokens": MAX_NEW_TOKENS, "do_sample": False, "primary_max_seq_len": PRIMARY_MAX_SEQ_LEN, "extrapolation_max_seq_len": EXTRAPOLATION_MAX_SEQ_LEN, "inference_rope_scaling": False, "retry": False, "repair": False}, "summary": summarize(results), "records": results, "complete": True}
+    report = {"schema_version": "1.0", "pipeline": PIPELINE, "inputs": {"evaluation": records_identity, "weights_sha256": actual_weights_sha256, "tokenizer": tokenizer_identity, "source_identities": source_identities}, "generation": {"max_new_tokens": MAX_NEW_TOKENS, "do_sample": False, "repetition_penalty": repetition_penalty, "no_repeat_ngram_size": no_repeat_ngram_size, "repetition_control_start_tokens": repetition_control_start_tokens, "repetition_tail_repeat_count": repetition_tail_repeat_count, "primary_max_seq_len": PRIMARY_MAX_SEQ_LEN, "extrapolation_max_seq_len": EXTRAPOLATION_MAX_SEQ_LEN, "inference_rope_scaling": False, "retry": False, "repair": False}, "summary": summarize(results), "records": results, "complete": True}
     output_path = Path(output).resolve()
     output_sidecar = output_path.with_suffix(output_path.suffix + ".sha256")
     if output_path.exists() or output_sidecar.exists():
@@ -389,12 +407,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--weights_sha256", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--device", default="cuda:0")
+    parser.add_argument("--repetition_penalty", type=float, default=1.0)
+    parser.add_argument("--no_repeat_ngram_size", type=int, default=0)
+    parser.add_argument("--repetition_control_start_tokens", type=int, default=0)
+    parser.add_argument("--repetition_tail_repeat_count", type=int, default=0)
     return parser
 
 
 def main() -> None:
     args = build_parser().parse_args()
-    report = run_evaluation(cases_manifest=args.cases_manifest, cases=args.cases, tokenizer_path=args.tokenizer_path, weights=args.weights, weights_sha256=args.weights_sha256, output=args.output, device_name=args.device)
+    report = run_evaluation(cases_manifest=args.cases_manifest, cases=args.cases, tokenizer_path=args.tokenizer_path, weights=args.weights, weights_sha256=args.weights_sha256, output=args.output, device_name=args.device, repetition_penalty=args.repetition_penalty, no_repeat_ngram_size=args.no_repeat_ngram_size, repetition_control_start_tokens=args.repetition_control_start_tokens, repetition_tail_repeat_count=args.repetition_tail_repeat_count)
     print(f"RAG_SFT_V2_EVALUATION_OK records={report['summary']['records']} protocol_valid_rate={report['summary']['protocol_valid_rate']:.6f}")
 
 

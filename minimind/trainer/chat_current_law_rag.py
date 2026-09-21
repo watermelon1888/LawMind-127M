@@ -9,14 +9,11 @@ from typing import Any, Callable, Sequence
 
 import torch
 
-from rag.answering import (
-    AnswerPromptTokenCounter,
-    EvidencePackager,
-    RAG_MAX_OUTPUT_TOKENS,
-)
-from rag.core import CurrentLawRAG, LegalRAG
-from rag.knowledge import ArticleRepository
-from rag.retrieval import load_semantic_retriever
+from rag.answering import RAG_MAX_OUTPUT_TOKENS
+from rag.app import RAGApplicationConfig, build_current_law_rag
+from rag.core import LegalRAG
+from rag.knowledge import ArticleRepository, EvidenceUnitRepository
+from rag.retrieval import load_evidence_unit_retriever, load_semantic_retriever
 from rag.retrieval.loader import DEFAULT_EMBEDDING_MODEL, DEFAULT_RERANKER_MODEL
 
 from .chat_rag_sft_v2 import CONTEXT_LIMIT, DEFAULT_TOKENIZER_PATH, load_runtime
@@ -25,6 +22,40 @@ from .chat_rag_sft_v2 import CONTEXT_LIMIT, DEFAULT_TOKENIZER_PATH, load_runtime
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_ARTICLE_INDEX = PROJECT_ROOT / "rag" / "chunk" / "article_index.jsonl"
 DEFAULT_ARTIFACT_DIR = PROJECT_ROOT / "rag" / "retrieval" / "artifacts"
+DEFAULT_EVIDENCE_UNIT_DIR = (
+    PROJECT_ROOT / "rag" / "retrieval" / "evidence_unit_artifacts" / "v1"
+)
+
+REPETITION_PENALTY = 1.04
+NO_REPEAT_NGRAM_SIZE = 6
+REPETITION_CONTROL_START_TOKENS = 60
+REPETITION_TAIL_REPEAT_COUNT = 3
+GENERATION_TAIL_REPEAT_COUNT = 0
+
+
+def _trim_repeated_tail(
+    token_ids: torch.Tensor,
+    *,
+    min_ngram_size: int = 2,
+    max_ngram_size: int = 8,
+    repeat_count: int = REPETITION_TAIL_REPEAT_COUNT,
+) -> torch.Tensor:
+    """截断输出尾部连续重复的短片段，保留前两次。"""
+    values = token_ids.tolist()
+    if len(values) < min_ngram_size * repeat_count:
+        return token_ids
+    upper = min(max_ngram_size, len(values) // repeat_count)
+    for ngram_size in range(upper, min_ngram_size - 1, -1):
+        suffix = values[-ngram_size:]
+        repeats = 1
+        cursor = len(values) - ngram_size
+        while cursor >= ngram_size and values[cursor - ngram_size:cursor] == suffix:
+            repeats += 1
+            cursor -= ngram_size
+        if repeats >= repeat_count:
+            keep_length = len(values) - ngram_size * (repeats - 2)
+            return token_ids[:keep_length]
+    return token_ids
 
 
 def resolve_local_huggingface_model(model_id: str) -> Path:
@@ -110,9 +141,14 @@ class MiniMindGenerator:
                 attention_mask=attention_mask,
                 max_new_tokens=max_tokens,
                 do_sample=False,
+                repetition_penalty=REPETITION_PENALTY,
+                no_repeat_ngram_size=NO_REPEAT_NGRAM_SIZE,
+                repetition_control_start_tokens=REPETITION_CONTROL_START_TOKENS,
+                repetition_tail_repeat_count=GENERATION_TAIL_REPEAT_COUNT,
+                eos_token_id=getattr(self._tokenizer, "eos_token_id", None),
                 use_cache=True,
             )
-        generated_ids = generated[0, prompt_tokens:]
+        generated_ids = _trim_repeated_tail(generated[0, prompt_tokens:])
         return self._tokenizer.decode(generated_ids, skip_special_tokens=True)
 
 
@@ -124,6 +160,10 @@ def load_application(
     article_index: Path,
     artifact_dir: Path,
     device_name: str,
+    external_llm=None,
+    enable_external_llm: bool = False,
+    retrieval_mode: str = "article",
+    evidence_unit_dir: Path | None = None,
     output_fn: Callable[[str], None] = print,
 ) -> LegalRAG:
     """加载一次完整本地运行时并返回统一法律 RAG 接口。"""
@@ -133,13 +173,33 @@ def load_application(
     output_fn("[2/3] 正在加载 dense、BM25 与 reranker……")
     embedding_model = resolve_local_huggingface_model(DEFAULT_EMBEDDING_MODEL)
     reranker_model = resolve_local_huggingface_model(DEFAULT_RERANKER_MODEL)
-    retriever = load_semantic_retriever(
-        repository=repository,
-        artifact_dir=artifact_dir,
-        embedding_model=str(embedding_model),
-        reranker_model=str(reranker_model),
-        device=device_name,
-    )
+    unit_repository = None
+    if retrieval_mode == "article":
+        retriever = load_semantic_retriever(
+            repository=repository,
+            artifact_dir=artifact_dir,
+            embedding_model=str(embedding_model),
+            reranker_model=str(reranker_model),
+            device=device_name,
+        )
+    elif retrieval_mode == "evidence_unit":
+        if evidence_unit_dir is None:
+            raise ValueError("evidence_unit 模式必须提供 evidence_unit_dir")
+        evidence_unit_dir = Path(evidence_unit_dir)
+        unit_repository = EvidenceUnitRepository.from_jsonl(
+            evidence_unit_dir / "evidence_units.jsonl",
+            article_repository=repository,
+        )
+        retriever = load_evidence_unit_retriever(
+            article_repository=repository,
+            unit_repository=unit_repository,
+            artifact_dir=evidence_unit_dir / "indexes",
+            embedding_model=str(embedding_model),
+            reranker_model=str(reranker_model),
+            device=device_name,
+        )
+    else:
+        raise ValueError("retrieval_mode 必须是 article 或 evidence_unit")
 
     output_fn("[3/3] 正在加载 MiniMind 回答模型……")
     model, tokenizer, device = load_runtime(
@@ -148,20 +208,26 @@ def load_application(
         tokenizer_path=tokenizer_path,
         device_name=device_name,
     )
-    packager = EvidencePackager(
-        context_limit=CONTEXT_LIMIT,
-        max_output_tokens=RAG_MAX_OUTPUT_TOKENS,
-        count_prompt_tokens=AnswerPromptTokenCounter(tokenizer),
-    )
-    application = CurrentLawRAG(
-        article_repository=repository,
-        semantic_retriever=retriever,
-        evidence_packager=packager,
+    return build_current_law_rag(
+        RAGApplicationConfig(
+            article_index=article_index,
+            artifact_dir=artifact_dir,
+            context_limit=CONTEXT_LIMIT,
+            max_output_tokens=RAG_MAX_OUTPUT_TOKENS,
+            embedding_model=str(embedding_model),
+            reranker_model=str(reranker_model),
+            device=device_name,
+            enable_external_llm=enable_external_llm,
+            retrieval_mode=retrieval_mode,
+            evidence_unit_dir=evidence_unit_dir,
+        ),
         generate=MiniMindGenerator(model=model, tokenizer=tokenizer, device=device),
-        max_output_tokens=RAG_MAX_OUTPUT_TOKENS,
+        tokenizer=tokenizer,
+        external_llm=external_llm,
+        repository=repository,
+        semantic_retriever=retriever,
+        unit_repository=unit_repository,
     )
-    output_fn("加载完成。")
-    return application
 
 
 def run_interactive(
@@ -208,6 +274,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="dense 与 BM25 检索产物目录",
     )
     parser.add_argument(
+        "--retrieval-mode",
+        choices=("article", "evidence_unit"),
+        default="article",
+        help="选择旧父法条链或父子证据链",
+    )
+    parser.add_argument(
+        "--evidence-unit-dir",
+        type=Path,
+        default=DEFAULT_EVIDENCE_UNIT_DIR,
+        help="版本化子单元 sidecar 与 indexes 的根目录",
+    )
+    parser.add_argument(
         "--device",
         default="cuda:0" if torch.cuda.is_available() else "cpu",
         help="模型与检索设备，例如 cuda:0 或 cpu",
@@ -224,6 +302,8 @@ def main() -> None:
         article_index=args.article_index,
         artifact_dir=args.artifact_dir,
         device_name=args.device,
+        retrieval_mode=args.retrieval_mode,
+        evidence_unit_dir=args.evidence_unit_dir,
     )
     run_interactive(application)
 
