@@ -142,7 +142,7 @@ LawMind-127M/
 > 本项目仅用于法律信息检索、模型训练与工程研究，不构成法律意见。
 
 ##  Cloudflare 临时隧道
-https://interstate-alert-knights-looks.trycloudflare.com/
+https://tennessee-biodiversity-carrying-pets.trycloudflare.com/
 
 | 问题 | 效果 |
 | --- | --- |
